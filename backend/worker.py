@@ -1,6 +1,16 @@
 """
-Yuno Sentinel - Anomaly Detection Worker
+Yuno Sentinel - Anomaly Detection Worker (Sentinel Worker)
 The Brain: Real-time pattern detection and self-healing recommendations
+
+TEAM: Detection Team
+RESPONSIBILITIES:
+- Scan Redis metrics every 10 seconds
+- Calculate error/decline rates
+- Detect anomalies (thresholds)
+- Execute JSONB queries for granular analysis
+- Call AI Agent service for LLM reasoning
+- Insert alerts into database
+- NO LLM logic (delegate to AI Agent)
 """
 import asyncio
 import redis.asyncio as redis
@@ -10,10 +20,10 @@ from decimal import Decimal
 import logging
 import uuid
 from collections import defaultdict
+import httpx
 
 from config import settings
 from database import async_session_maker, get_issuer_breakdown, get_merchant_rules
-from llm_service import llm_service
 
 # Configure logging
 logging.basicConfig(
@@ -163,29 +173,32 @@ class AnomalyDetector:
             alert_type=alert_type
         )
 
-        # Step 4: Generate LLM explanation
-        llm_explanation = None
-        if llm_service:
-            try:
-                issuer_name = issuer_breakdown[0]["issuer_name"] if issuer_breakdown else None
-                sub_statuses = issuer_breakdown[0]["sub_statuses"] if issuer_breakdown else []
+        # Step 4: Call AI Agent for LLM explanation
+        # INTERFACE CONTRACT: Detection Team → AI Team
+        ai_response = await self.call_ai_agent(
+            provider=provider,
+            country=country,
+            error_count=affected_count,
+            revenue_at_risk=float(revenue_at_risk),
+            issuer_breakdown=issuer_breakdown
+        )
 
-                llm_explanation = llm_service.generate_alert_explanation(
-                    provider=provider,
-                    country=country,
-                    error_count=affected_count,
-                    revenue_at_risk=float(revenue_at_risk),
-                    issuer_name=issuer_name,
-                    sub_statuses=sub_statuses
-                )
-            except Exception as e:
-                logger.error(f"LLM generation failed: {e}")
+        # Extract AI Agent response
+        llm_explanation = ai_response.get("explanation") if ai_response else None
+        confidence_score = ai_response.get("confidence", 0.85) if ai_response else 0.5
+
+        # Override suggested_action with AI recommendation (if available)
+        if ai_response and ai_response.get("recommended_action"):
+            suggested_action = {
+                "label": ai_response["recommended_action"],
+                "action_type": ai_response.get("action_type", "CONTACT_ISSUER")
+            }
 
         # Step 5: Insert alert into database
         alert_id = await self.save_alert(
             severity=severity,
             title=f"{provider} {country} - {alert_type.replace('_', ' ').title()}",
-            confidence_score=0.85,
+            confidence_score=confidence_score,
             revenue_at_risk_usd=revenue_at_risk,
             affected_transactions=affected_count,
             root_cause=root_cause,
@@ -345,6 +358,68 @@ class AnomalyDetector:
         except Exception as e:
             logger.error(f"Failed to save alert: {e}")
             return str(uuid.uuid4())
+
+    async def call_ai_agent(
+        self,
+        provider: str,
+        country: str,
+        error_count: int,
+        revenue_at_risk: float,
+        issuer_breakdown: list
+    ) -> dict | None:
+        """
+        Call AI Agent service for LLM reasoning
+
+        INTERFACE CONTRACT with AI Team
+        - Endpoint: POST /analyze
+        - Timeout: 5s (AI processing is async to detection)
+        - Fallback: Returns None if AI Agent is unavailable
+
+        Returns: AI response dict or None
+        """
+        try:
+            # Prepare context for AI Agent
+            issuer_name = issuer_breakdown[0]["issuer_name"] if issuer_breakdown else None
+            sub_statuses = issuer_breakdown[0]["sub_statuses"] if issuer_breakdown else []
+
+            context = {
+                "provider": provider,
+                "country": country,
+                "error_count": error_count,
+                "revenue_at_risk_usd": revenue_at_risk,
+                "issuer_name": issuer_name,
+                "sub_statuses": [s for s in sub_statuses if s],
+                "merchant_advice_code": None,  # TODO: Extract from JSONB
+                "time_window_minutes": 15
+            }
+
+            # Call AI Agent
+            ai_agent_url = getattr(settings, 'ai_agent_url', 'http://ai-agent:8001')
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{ai_agent_url}/analyze",
+                    json=context
+                )
+                response.raise_for_status()
+                ai_response = response.json()
+
+                logger.info(
+                    f"AI Agent response: confidence={ai_response.get('confidence', 0):.2f}, "
+                    f"time={ai_response.get('processing_time_ms', 0)}ms"
+                )
+
+                return ai_response
+
+        except httpx.TimeoutException:
+            logger.warning("AI Agent timeout - continuing without LLM explanation")
+            return None
+        except httpx.HTTPStatusError as e:
+            logger.error(f"AI Agent HTTP error: {e.response.status_code}")
+            return None
+        except Exception as e:
+            logger.error(f"AI Agent call failed: {e}")
+            return None
 
 
 async def main():

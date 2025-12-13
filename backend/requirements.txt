@@ -20,3 +20,4 @@ openai==1.3.7
 
 # HTTP Client
 requests==2.31.0
+httpx==0.25.2  # Async HTTP client for Worker → AI Agent communication

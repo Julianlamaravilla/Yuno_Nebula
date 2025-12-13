@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Worker Configuration
     check_interval_seconds: int = 10
 
+    # AI Agent Service URL (for Detection Team → AI Team communication)
+    ai_agent_url: str = "http://ai-agent:8001"
+
     # Redis Key Patterns
     redis_stats_key_pattern: str = "stats:{country}:{provider}:{status}:{minute}"
     redis_key_ttl_seconds: int = 3600  # 1 hour
