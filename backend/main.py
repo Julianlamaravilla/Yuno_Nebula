@@ -122,7 +122,7 @@ async def ingest_transaction(
             "provider_id": payment.provider_data.id,
             "status": payment.status,
             "amount_usd": float(amount_usd),
-            "raw_payload": payment.model_dump(mode='json')
+            "raw_payload": json.dumps(payment.model_dump(mode='json'))
         }
 
         # Step 3: Insert into PostgreSQL
