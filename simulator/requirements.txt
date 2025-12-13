@@ -1,0 +1,5 @@
+# Fake data generation
+faker==20.1.0
+
+# HTTP Client
+requests==2.31.0
