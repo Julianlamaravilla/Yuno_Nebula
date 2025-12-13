@@ -76,11 +76,32 @@ services:
       ALERT_THRESHOLD_ERROR_RATE: ${ALERT_THRESHOLD_ERROR_RATE:-0.15}
       ALERT_THRESHOLD_DECLINE_RATE: ${ALERT_THRESHOLD_DECLINE_RATE:-0.20}
       CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-10}
+      AI_AGENT_URL: http://ai-agent:8001
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ai-agent:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    networks:
+      - yuno_network
+    restart: unless-stopped
+
+  ai-agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ai-agent
+    container_name: yuno_ai_agent
+    ports:
+      - "8001:8001"
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./backend:/app
     networks:
