@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: yuno_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yuno_sentinel}
+      POSTGRES_USER: ${POSTGRES_USER:-yuno_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yuno_secret_2024}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yuno_admin} -d ${POSTGRES_DB:-yuno_sentinel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - yuno_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: yuno_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - yuno_network
+
+  ingestor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ingestor
+    container_name: yuno_ingestor
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yuno_admin}:${POSTGRES_PASSWORD:-yuno_secret_2024}@db:5432/${POSTGRES_DB:-yuno_sentinel}
+      REDIS_URL: redis://redis:6379
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - yuno_network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: yuno_worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yuno_admin}:${POSTGRES_PASSWORD:-yuno_secret_2024}@db:5432/${POSTGRES_DB:-yuno_sentinel}
+      REDIS_URL: redis://redis:6379
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ALERT_THRESHOLD_ERROR_RATE: ${ALERT_THRESHOLD_ERROR_RATE:-0.15}
+      ALERT_THRESHOLD_DECLINE_RATE: ${ALERT_THRESHOLD_DECLINE_RATE:-0.20}
+      CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-10}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - yuno_network
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: yuno_simulator
+    environment:
+      API_URL: http://ingestor:8000
+      TRANSACTIONS_PER_SECOND: ${TRANSACTIONS_PER_SECOND:-10}
+      CHAOS_PROBABILITY: ${CHAOS_PROBABILITY:-0.05}
+    depends_on:
+      - ingestor
+    volumes:
+      - ./simulator:/app
+    networks:
+      - yuno_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  yuno_network:
+    driver: bridge
