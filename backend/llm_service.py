@@ -20,7 +20,7 @@ class LLMService:
         if self.provider == "gemini":
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
+            self.model = genai.GenerativeModel('gemini-2.5-flash-lite')  # Modelo más ligero y estable
         elif self.provider == "openai":
             from openai import OpenAI
             self.client = OpenAI(api_key=self.api_key)
