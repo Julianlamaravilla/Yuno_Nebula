@@ -222,12 +222,14 @@ class AnomalyDetector:
     ):
         """
         Create alert with granular analysis and LLM explanation
-        """
-        # Step 1: Granular JSONB analysis - check if issuer-specific
-        issuer_breakdown = await self.get_issuer_analysis(provider, country)
 
-        # Step 2: Calculate financial impact
-        revenue_at_risk = await self.calculate_revenue_impact(provider, country)
+        CRITICAL: All analysis functions use merchant_id for strict data isolation
+        """
+        # Step 1: Granular JSONB analysis - check if issuer-specific (merchant-isolated)
+        issuer_breakdown = await self.get_issuer_analysis(merchant_id, provider, country)
+
+        # Step 2: Calculate financial impact (merchant-isolated)
+        revenue_at_risk = await self.calculate_revenue_impact(merchant_id, provider, country)
 
         # Step 3: Determine root cause (include error code details)
         root_cause, suggested_action = await self.determine_root_cause(
@@ -469,10 +471,12 @@ class AnomalyDetector:
             logger.error(f"Error code breakdown failed: {e}")
             return {"response_codes": {}, "sub_statuses": []}
 
-    async def get_issuer_analysis(self, provider: str, country: str) -> list:
+    async def get_issuer_analysis(self, merchant_id: str, provider: str, country: str) -> list:
         """
         Query JSONB payload for issuer-level breakdown
         Returns list of issuers with error counts
+
+        CRITICAL: Filters by merchant_id to ensure strict data isolation
         """
         try:
             query = text("""
@@ -483,7 +487,8 @@ class AnomalyDetector:
                     ARRAY_AGG(DISTINCT raw_payload->>'sub_status') as sub_statuses
                 FROM events_log
                 WHERE
-                    provider_id = :provider
+                    merchant_id = :merchant_id
+                    AND provider_id = :provider
                     AND raw_payload->>'country' = :country
                     AND status = 'ERROR'
                     AND created_at >= NOW() - INTERVAL '15 minutes'
@@ -495,7 +500,11 @@ class AnomalyDetector:
             """)
 
             async with async_session_maker() as session:
-                result = await session.execute(query, {"provider": provider, "country": country})
+                result = await session.execute(query, {
+                    "merchant_id": merchant_id,
+                    "provider": provider,
+                    "country": country
+                })
                 rows = result.fetchall()
 
                 return [
@@ -509,28 +518,37 @@ class AnomalyDetector:
                 ]
 
         except Exception as e:
-            logger.error(f"Issuer analysis failed: {e}")
+            logger.error(f"Issuer analysis failed for merchant {merchant_id}: {e}")
             return []
 
-    async def calculate_revenue_impact(self, provider: str, country: str) -> Decimal:
-        """Calculate total revenue at risk"""
+    async def calculate_revenue_impact(self, merchant_id: str, provider: str, country: str) -> Decimal:
+        """
+        Calculate total revenue at risk for a specific merchant
+
+        CRITICAL: Filters by merchant_id to ensure accurate per-merchant financial impact
+        """
         try:
             query = text("""
                 SELECT COALESCE(SUM(amount_usd), 0)
                 FROM events_log
                 WHERE
-                    provider_id = :provider
+                    merchant_id = :merchant_id
+                    AND provider_id = :provider
                     AND raw_payload->>'country' = :country
                     AND status = 'ERROR'
                     AND created_at >= NOW() - INTERVAL '15 minutes'
             """)
 
             async with async_session_maker() as session:
-                result = await session.execute(query, {"provider": provider, "country": country})
+                result = await session.execute(query, {
+                    "merchant_id": merchant_id,
+                    "provider": provider,
+                    "country": country
+                })
                 return Decimal(str(result.scalar() or 0))
 
         except Exception as e:
-            logger.error(f"Revenue calculation failed: {e}")
+            logger.error(f"Revenue calculation failed for merchant {merchant_id}: {e}")
             return Decimal("0")
 
     async def determine_root_cause(
