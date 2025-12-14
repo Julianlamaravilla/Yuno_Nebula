@@ -47,33 +47,33 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0a0e1a]">
+      <div className="min-h-screen flex items-center justify-center bg-[#f8fafc]">
         <div className="text-center">
-          <Activity size={40} className="text-blue-500 animate-pulse mx-auto mb-4" />
-          <p className="text-gray-400 text-sm font-medium">Initializing Sentinel...</p>
+          <Activity size={40} className="text-blue-400 animate-pulse mx-auto mb-4" />
+          <p className="text-slate-600 text-sm font-medium">Initializing Sentinel...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a]">
+    <div className="min-h-screen bg-[#f8fafc]">
       {/* Header */}
-      <header className="bg-gray-900 border-b border-gray-800">
+      <header className="bg-white border-b border-blue-100 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Shield size={28} className="text-blue-500" />
+              <Shield size={28} className="text-blue-400" />
               <div>
-                <h1 className="text-xl font-semibold text-gray-100">Yuno Sentinel</h1>
-                <p className="text-xs text-gray-500">Real-time Financial Observability Platform</p>
+                <h1 className="text-xl font-semibold text-slate-800">Yuno Sentinel</h1>
+                <p className="text-xs text-slate-500">Real-time Financial Observability Platform</p>
               </div>
             </div>
             <div className="flex items-center gap-4">
               <div className="text-right">
-                <div className="text-xs text-gray-500">Last updated</div>
-                <div className="text-sm text-gray-300 font-medium tabular-nums flex items-center gap-1.5">
-                  <RefreshCw size={12} className="text-gray-500" />
+                <div className="text-xs text-slate-500">Last updated</div>
+                <div className="text-sm text-slate-700 font-medium tabular-nums flex items-center gap-1.5">
+                  <RefreshCw size={12} className="text-blue-400" />
                   {lastUpdate.toLocaleTimeString('en-US', {
                     hour: '2-digit',
                     minute: '2-digit',
@@ -90,22 +90,22 @@ function App() {
         {/* KPI Section */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
           {/* Revenue at Risk - Prominent */}
-          <div className="md:col-span-2 bg-gradient-to-br from-red-950/30 to-red-900/20 border border-red-900/50 rounded-lg p-6 shadow-sm">
+          <div className="md:col-span-2 bg-white border border-blue-200 rounded-lg p-6 shadow-sm">
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-2">
-                  <DollarSign size={18} className="text-red-400" />
-                  <h3 className="text-xs font-medium text-red-300 uppercase tracking-wide">
+                  <DollarSign size={18} className="text-blue-400" />
+                  <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wide">
                     Revenue at Risk
                   </h3>
                 </div>
-                <div className="text-4xl font-bold text-red-400 tabular-nums mb-1">
+                <div className="text-4xl font-bold text-blue-500 tabular-nums mb-1">
                   ${totalRevenueAtRisk.toLocaleString('en-US', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2
                   })}
                 </div>
-                <p className="text-xs text-red-300/70">
+                <p className="text-xs text-slate-500">
                   {alerts.length} active {alerts.length === 1 ? 'incident' : 'incidents'}
                 </p>
               </div>
@@ -113,55 +113,55 @@ function App() {
           </div>
 
           {/* Active Alerts */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
+          <div className="bg-white border border-blue-100 rounded-lg p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-2">
-              <AlertTriangle size={16} className="text-gray-500" />
-              <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+              <AlertTriangle size={16} className="text-blue-400" />
+              <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wide">
                 Active Alerts
               </h3>
             </div>
-            <div className="text-3xl font-bold text-gray-100 tabular-nums mb-2">
+            <div className="text-3xl font-bold text-slate-800 tabular-nums mb-2">
               {alerts.length}
             </div>
             <div className="flex flex-col gap-1 text-xs">
               {criticalCount > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                  <span className="text-red-400 font-medium">{criticalCount} Critical</span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                  <span className="text-slate-700 font-medium">{criticalCount} Critical</span>
                 </div>
               )}
               {warningCount > 0 && (
                 <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                  <span className="text-yellow-400 font-medium">{warningCount} Warning</span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span className="text-slate-700 font-medium">{warningCount} Warning</span>
                 </div>
               )}
               {alerts.length === 0 && (
-                <span className="text-gray-500">No incidents</span>
+                <span className="text-slate-500">No incidents</span>
               )}
             </div>
           </div>
 
           {/* System Health */}
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
+          <div className="bg-white border border-blue-100 rounded-lg p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-2">
-              <Activity size={16} className="text-gray-500" />
-              <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+              <Activity size={16} className="text-blue-400" />
+              <h3 className="text-xs font-medium text-slate-600 uppercase tracking-wide">
                 System Health
               </h3>
             </div>
             <div className={`text-3xl font-bold tabular-nums mb-2 ${
-              healthScore >= 80 ? 'text-green-400' :
-              healthScore >= 60 ? 'text-yellow-400' : 'text-red-400'
+              healthScore >= 80 ? 'text-blue-500' :
+              healthScore >= 60 ? 'text-amber-500' : 'text-red-400'
             }`}>
               {healthScore}%
             </div>
             <div className="flex items-center gap-2">
               <div className={`w-1.5 h-1.5 rounded-full ${
-                healthScore >= 80 ? 'bg-green-500' :
-                healthScore >= 60 ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
+                healthScore >= 80 ? 'bg-blue-400' :
+                healthScore >= 60 ? 'bg-amber-400' : 'bg-red-400 animate-pulse'
               }`} />
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-slate-500">
                 {healthScore >= 80 ? 'Operational' :
                  healthScore >= 60 ? 'Degraded' : 'Critical'}
               </span>
@@ -177,14 +177,14 @@ function App() {
         {/* Alerts Feed */}
         <div>
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
-              <AlertTriangle size={20} />
+            <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+              <AlertTriangle size={20} className="text-blue-400" />
               Alert Feed
             </h2>
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-slate-600">
               {alerts.length === 0 ? (
                 <span className="flex items-center gap-1.5">
-                  <CheckCircle2 size={14} className="text-green-500" />
+                  <CheckCircle2 size={14} className="text-blue-400" />
                   No active incidents
                 </span>
               ) : (
@@ -194,10 +194,10 @@ function App() {
           </div>
 
           {alerts.length === 0 ? (
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-12 text-center">
-              <CheckCircle2 size={48} className="text-green-500/50 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-green-400 mb-2">All Systems Operational</h3>
-              <p className="text-sm text-gray-500">No anomalies detected in recent monitoring window</p>
+            <div className="bg-white border border-blue-100 rounded-lg p-12 text-center shadow-sm">
+              <CheckCircle2 size={48} className="text-blue-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-blue-500 mb-2">All Systems Operational</h3>
+              <p className="text-sm text-slate-500">No anomalies detected in recent monitoring window</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -210,9 +210,9 @@ function App() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-gray-900 border-t border-gray-800 mt-12">
+      <footer className="bg-white border-t border-blue-100 mt-12">
         <div className="max-w-7xl mx-auto px-6 py-4 text-center">
-          <p className="text-xs text-gray-600">
+          <p className="text-xs text-slate-500">
             Yuno Sentinel v1.0 · Powered by Gemini AI · Auto-refresh: 5s
           </p>
         </div>

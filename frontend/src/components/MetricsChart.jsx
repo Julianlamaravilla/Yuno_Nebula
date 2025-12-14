@@ -49,15 +49,15 @@ const MetricsChart = () => {
   const CustomTooltip = ({ active, payload }) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-gray-900 border border-gray-700 p-3 rounded-md shadow-xl">
-          <p className="text-gray-300 text-xs font-medium mb-1.5">{payload[0].payload.time}</p>
-          <p className="text-green-400 text-sm font-semibold">
+        <div className="bg-white border border-blue-200 p-3 rounded-md shadow-xl">
+          <p className="text-slate-700 text-xs font-medium mb-1.5">{payload[0].payload.time}</p>
+          <p className="text-blue-500 text-sm font-semibold">
             Approval Rate: {payload[0].value}%
           </p>
           <p className="text-red-400 text-sm font-semibold">
             Error Rate: {payload[0].payload.errorRate}%
           </p>
-          <p className="text-gray-400 text-xs mt-1.5">
+          <p className="text-slate-500 text-xs mt-1.5">
             {payload[0].payload.totalTransactions} transactions
           </p>
         </div>
@@ -68,10 +68,10 @@ const MetricsChart = () => {
 
   if (loading) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center min-h-[400px]">
+      <div className="bg-white border border-blue-100 rounded-lg p-6 flex items-center justify-center min-h-[400px] shadow-sm">
         <div className="flex flex-col items-center gap-3">
-          <Activity size={24} className="text-gray-600 animate-pulse" />
-          <div className="text-gray-500 text-sm">Loading metrics...</div>
+          <Activity size={24} className="text-blue-400 animate-pulse" />
+          <div className="text-slate-600 text-sm">Loading metrics...</div>
         </div>
       </div>
     );
@@ -79,15 +79,15 @@ const MetricsChart = () => {
 
   if (error) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 min-h-[400px]">
-        <h2 className="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
-          <TrendingDown size={20} />
+      <div className="bg-white border border-blue-100 rounded-lg p-6 min-h-[400px] shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+          <TrendingDown size={20} className="text-blue-400" />
           Approval Rate Timeline
         </h2>
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-          <AlertCircle size={32} className="text-red-500/50" />
-          <p className="text-sm text-gray-500">Failed to load metrics data</p>
-          <p className="text-xs text-gray-600">{error}</p>
+          <AlertCircle size={32} className="text-red-400" />
+          <p className="text-sm text-slate-600">Failed to load metrics data</p>
+          <p className="text-xs text-slate-500">{error}</p>
         </div>
       </div>
     );
@@ -95,15 +95,15 @@ const MetricsChart = () => {
 
   if (metricsData.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 min-h-[400px]">
-        <h2 className="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
-          <TrendingDown size={20} />
+      <div className="bg-white border border-blue-100 rounded-lg p-6 min-h-[400px] shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
+          <TrendingDown size={20} className="text-blue-400" />
           Approval Rate Timeline
         </h2>
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-          <Activity size={32} className="text-gray-600" />
-          <p className="text-sm text-gray-500">No metrics data available</p>
-          <p className="text-xs text-gray-600">Waiting for transaction data...</p>
+          <Activity size={32} className="text-blue-300" />
+          <p className="text-sm text-slate-600">No metrics data available</p>
+          <p className="text-xs text-slate-500">Waiting for transaction data...</p>
         </div>
       </div>
     );
@@ -113,31 +113,31 @@ const MetricsChart = () => {
   const healthStatus = latestMetric.approvalRate >= 85 ? 'healthy' : latestMetric.approvalRate >= 70 ? 'degraded' : 'critical';
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 shadow-sm">
+    <div className="bg-white border border-blue-100 rounded-lg p-6 shadow-sm">
       <div className="flex items-center justify-between mb-5">
-        <h2 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
-          <TrendingDown size={20} />
+        <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+          <TrendingDown size={20} className="text-blue-400" />
           Approval Rate Timeline
         </h2>
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${healthStatus === 'healthy' ? 'bg-green-500' :
-              healthStatus === 'degraded' ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
+          <div className={`w-2 h-2 rounded-full ${healthStatus === 'healthy' ? 'bg-blue-400' :
+              healthStatus === 'degraded' ? 'bg-amber-400' : 'bg-red-400 animate-pulse'
             }`} />
-          <span className="text-xs text-gray-500 capitalize">{healthStatus}</span>
+          <span className="text-xs text-slate-600 capitalize">{healthStatus}</span>
         </div>
       </div>
 
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={metricsData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
           <XAxis
             dataKey="time"
-            stroke="#6b7280"
+            stroke="#94a3b8"
             style={{ fontSize: '11px', fontFamily: 'Inter' }}
             tickLine={false}
           />
           <YAxis
-            stroke="#6b7280"
+            stroke="#94a3b8"
             style={{ fontSize: '11px', fontFamily: 'Inter' }}
             domain={[0, 100]}
             tickLine={false}
@@ -145,38 +145,38 @@ const MetricsChart = () => {
               value: 'Approval Rate (%)',
               angle: -90,
               position: 'insideLeft',
-              style: { fill: '#6b7280', fontSize: '11px', fontFamily: 'Inter' }
+              style: { fill: '#64748b', fontSize: '11px', fontFamily: 'Inter' }
             }}
           />
           <Tooltip content={<CustomTooltip />} />
           <Line
             type="monotone"
             dataKey="approvalRate"
-            stroke="#10b981"
-            strokeWidth={2}
+            stroke="#60a5fa"
+            strokeWidth={2.5}
             dot={false}
-            activeDot={{ r: 4, fill: '#10b981' }}
+            activeDot={{ r: 5, fill: '#60a5fa' }}
           />
         </LineChart>
       </ResponsiveContainer>
 
       {/* Stats Row */}
       <div className="mt-5 grid grid-cols-3 gap-4">
-        <div className="bg-gray-950/50 p-3 rounded-md border border-gray-800">
-          <div className="text-xs text-gray-500 mb-1">Current Rate</div>
-          <div className="text-xl font-bold text-green-400 tabular-nums">
+        <div className="bg-blue-50 p-3 rounded-md border border-blue-100">
+          <div className="text-xs text-slate-600 mb-1">Current Rate</div>
+          <div className="text-xl font-bold text-blue-500 tabular-nums">
             {latestMetric.approvalRate || 0}%
           </div>
         </div>
-        <div className="bg-gray-950/50 p-3 rounded-md border border-gray-800">
-          <div className="text-xs text-gray-500 mb-1">Error Rate</div>
+        <div className="bg-red-50 p-3 rounded-md border border-red-100">
+          <div className="text-xs text-slate-600 mb-1">Error Rate</div>
           <div className="text-xl font-bold text-red-400 tabular-nums">
             {latestMetric.errorRate || 0}%
           </div>
         </div>
-        <div className="bg-gray-950/50 p-3 rounded-md border border-gray-800">
-          <div className="text-xs text-gray-500 mb-1">Transactions/min</div>
-          <div className="text-xl font-bold text-blue-400 tabular-nums">
+        <div className="bg-blue-50 p-3 rounded-md border border-blue-100">
+          <div className="text-xs text-slate-600 mb-1">Transactions/min</div>
+          <div className="text-xl font-bold text-blue-500 tabular-nums">
             {latestMetric.totalTransactions || 0}
           </div>
         </div>
