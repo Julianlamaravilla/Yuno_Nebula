@@ -24,7 +24,7 @@ from collections import defaultdict
 import httpx
 
 from config import settings
-from database import async_session_maker, get_issuer_breakdown, get_alert_rules
+from database import async_session_maker, get_issuer_breakdown, get_alert_rules_for_context, get_merchant_rules
 
 # Configure logging
 logging.basicConfig(
@@ -103,14 +103,23 @@ class AnomalyDetector:
 
     async def analyze_provider(self, country: str, provider: str, status_counts: dict):
         """
-        Analyze metrics for a specific provider/country with smart trend detection
-        
-        NEW LOGIC:
-        1. Detect error trends (not isolated incidents)
-        2. Check response codes for specific HTTP errors
-        3. Verify errors are persistent before alerting
-        4. Auto-resolve if recovered
+        Analyze metrics with custom alert_rules per merchant
         """
+        # Get merchant_id from recent transactions
+        merchant_id = await self.get_merchant_from_context(provider, country)
+        
+        # Load custom alert rule
+        alert_rule = await get_alert_rules_for_context(merchant_id, country, provider)
+        
+        if not alert_rule:
+            logger.warning(f"No rule for {merchant_id}/{country}/{provider}, using defaults")
+            error_threshold = self.error_threshold
+            min_consecutive_errors = settings.min_consecutive_errors
+        else:
+            error_threshold = alert_rule["threshold_error_rate"]
+            min_consecutive_errors = alert_rule["min_consecutive_errors"]
+            logger.debug(f"Using rule for {merchant_id}/{country}/{provider} (threshold={error_threshold:.1%})")
+        
         total = sum(status_counts.values())
         if total < settings.min_transactions_for_alert:
             return
@@ -124,7 +133,9 @@ class AnomalyDetector:
         decline_rate = declined / (succeeded + declined) if (succeeded + declined) > 0 else 0
 
         # Check if error trend is persistent (anti-false positive)
-        is_persistent_error = await self.check_error_trend(provider, country, errors, total)
+        is_persistent_error = await self.check_error_trend(
+            provider, country, errors, total, min_consecutive_errors
+        )
         
         # Check for recovery (if previously alerted, verify issue persists)
         is_recovered = await self.check_recovery(provider, country, succeeded)
@@ -136,7 +147,7 @@ class AnomalyDetector:
             return
 
         # Red Alert: High error rate WITH persistent trend
-        if error_rate > self.error_threshold and is_persistent_error:
+        if error_rate > error_threshold and is_persistent_error:
             # Check if already alerted recently
             if self.should_alert(provider, country, "HIGH_ERROR_RATE"):
                 # Get detailed error breakdown (response codes)
@@ -145,14 +156,16 @@ class AnomalyDetector:
                 severity = "CRITICAL" if error_rate > 0.30 else "WARNING"
                 
                 logger.warning(
-                    f"🚨 PERSISTENT ERROR DETECTED: {provider} in {country} "
+                    f"🚨 PERSISTENT ERROR: {provider} in {country} "
                     f"({error_rate:.1%}, {errors}/{total} txns) - {severity}"
+                    f"\n   Merchant: {merchant_id}, Threshold: {error_threshold:.1%}"
                     f"\n   Response codes: {error_details.get('response_codes', {})}"
                 )
                 
                 await self.create_alert(
                     provider=provider,
                     country=country,
+                    merchant_id=merchant_id,
                     severity=severity,
                     alert_type="HIGH_ERROR_RATE",
                     affected_count=errors,
@@ -162,7 +175,7 @@ class AnomalyDetector:
                 
                 self.active_alerts[alert_key] = datetime.now()
 
-        # Yellow Alert: Elevated decline rate
+        # Yellow Alert: Elevated decline rate (simplified - use default 50%)
         elif decline_rate > self.decline_threshold:
             alert_key_decline = (provider, country, "HIGH_DECLINE_RATE")
             
@@ -177,6 +190,7 @@ class AnomalyDetector:
                 await self.create_alert(
                     provider=provider,
                     country=country,
+                    merchant_id=merchant_id,
                     severity=severity,
                     alert_type="HIGH_DECLINE_RATE",
                     affected_count=declined,
@@ -189,6 +203,7 @@ class AnomalyDetector:
         self,
         provider: str,
         country: str,
+        merchant_id: str,
         severity: str,
         alert_type: str,
         affected_count: int,
@@ -252,6 +267,36 @@ class AnomalyDetector:
             f"{provider} {country} ({affected_count} txns, ${revenue_at_risk:.2f} at risk)"
         )
 
+    async def get_merchant_from_context(self, provider: str, country: str) -> str:
+        """
+        Get merchant_id from recent transactions for this provider/country context
+        Used to apply merchant-specific alert rules
+        
+        Returns: merchant_id or 'unknown'
+        """
+        try:
+            query = text("""
+                SELECT merchant_id, COUNT(*) as txn_count
+                FROM events_log
+                WHERE 
+                    provider_id = :provider
+                    AND raw_payload->>'country' = :country
+                    AND created_at >= NOW() - INTERVAL '5 minutes'
+                GROUP BY merchant_id
+                ORDER BY txn_count DESC
+                LIMIT 1
+            """)
+            
+            async with async_session_maker() as session:
+                result = await session.execute(query, {"provider": provider, "country": country})
+                row = result.fetchone()
+                
+                return row[0] if row else "unknown"
+                
+        except Exception as e:
+            logger.error(f"Failed to get merchant context: {e}")
+            return "unknown"
+
     def should_alert(self, provider: str, country: str, alert_type: str) -> bool:
         """
         Check if we should alert based on cooldown period
@@ -267,7 +312,7 @@ class AnomalyDetector:
         
         return (datetime.now() - last_alert) > cooldown
 
-    async def check_error_trend(self, provider: str, country: str, current_errors: int, total: int) -> bool:
+    async def check_error_trend(self, provider: str, country: str, current_errors: int, total: int, min_consecutive: int = None) -> bool:
         """
         Check if errors are part of a persistent trend (not isolated)
         
@@ -275,7 +320,9 @@ class AnomalyDetector:
         - We have minimum consecutive errors in time window
         - Error pattern is consistent (not random spikes)
         """
-        if current_errors < settings.min_consecutive_errors:
+        min_consecutive = min_consecutive or settings.min_consecutive_errors
+        
+        if current_errors < min_consecutive:
             return False
         
         try:

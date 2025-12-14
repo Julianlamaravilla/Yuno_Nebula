@@ -66,12 +66,48 @@ CREATE TABLE merchant_rules (
 );
 
 -- ============================================
+-- TABLE: alert_rules
+-- Custom alert thresholds per merchant/provider/country
+-- ============================================
+CREATE TABLE alert_rules (
+    rule_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    merchant_id VARCHAR(100),  -- NULL = global rule
+    
+    -- Filters (NULL = applies to all)
+    filter_country CHAR(2),
+    filter_provider VARCHAR(50),
+    
+    -- Thresholds (simplified)
+    threshold_error_rate DECIMAL(4,3) NOT NULL DEFAULT 0.10,
+    min_consecutive_errors INTEGER NOT NULL DEFAULT 8,
+    
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_alert_rules_merchant ON alert_rules(merchant_id);
+CREATE INDEX idx_alert_rules_active ON alert_rules(is_active) WHERE is_active = TRUE;
+CREATE INDEX idx_alert_rules_lookup ON alert_rules(merchant_id, filter_country, filter_provider) WHERE is_active = TRUE;
+
+-- ============================================
 -- SEED DATA: Insert sample merchant rules
 -- ============================================
 INSERT INTO merchant_rules (merchant_id, sla_minutes, avg_approval_rate) VALUES
     ('merchant_shopito', 5, 0.72),
     ('merchant_techstore', 3, 0.68),
     ('merchant_fashionhub', 5, 0.75);
+
+-- SEED DATA: Default alert rules
+INSERT INTO alert_rules (merchant_id, filter_country, filter_provider, threshold_error_rate, min_consecutive_errors) VALUES
+    -- Global default
+    (NULL, NULL, NULL, 0.10, 8),
+    -- Shopito MX is more sensitive
+    ('merchant_shopito', 'MX', NULL, 0.05, 5),
+    -- TechStore Stripe BR is critical
+    ('merchant_techstore', 'BR', 'STRIPE', 0.03, 3),
+    -- FashionHub is less sensitive (high volume)
+    ('merchant_fashionhub', NULL, NULL, 0.20, 15);
 
 -- ============================================
 -- HELPER FUNCTIONS

@@ -99,6 +99,90 @@ async def get_issuer_breakdown(provider_id: str, minutes: int = 15):
     return await execute_raw_query(query, {"provider_id": provider_id, "minutes": minutes})
 
 
+async def get_alert_rules_for_context(merchant_id: str, country: str, provider: str):
+    """
+    Get applicable alert rule for specific context
+    Priority: Merchant+Country+Provider > Merchant+Country > Merchant+Provider > Merchant > Global
+    """
+    query = text("""
+        SELECT
+            rule_id,
+            merchant_id,
+            filter_country,
+            filter_provider,
+            threshold_error_rate,
+            min_consecutive_errors
+        FROM alert_rules
+        WHERE is_active = TRUE
+          AND (
+              (merchant_id = :merchant_id AND filter_country = :country AND filter_provider = :provider)
+              OR (merchant_id = :merchant_id AND filter_country = :country AND filter_provider IS NULL)
+              OR (merchant_id = :merchant_id AND filter_country IS NULL AND filter_provider = :provider)
+              OR (merchant_id = :merchant_id AND filter_country IS NULL AND filter_provider IS NULL)
+              OR (merchant_id IS NULL)
+          )
+        ORDER BY 
+            CASE 
+                WHEN merchant_id = :merchant_id AND filter_country = :country AND filter_provider = :provider THEN 5
+                WHEN merchant_id = :merchant_id AND filter_country = :country THEN 4
+                WHEN merchant_id = :merchant_id AND filter_provider = :provider THEN 3
+                WHEN merchant_id = :merchant_id THEN 2
+                ELSE 1
+            END DESC,
+            created_at DESC
+        LIMIT 1
+    """)
+    
+    async with async_session_maker() as session:
+        result = await session.execute(query, {
+            "merchant_id": merchant_id,
+            "country": country,
+            "provider": provider
+        })
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        return {
+            "rule_id": str(row[0]),
+            "merchant_id": row[1],
+            "filter_country": row[2],
+            "filter_provider": row[3],
+            "threshold_error_rate": float(row[4]),
+            "min_consecutive_errors": row[5]
+        }
+
+
+async def get_merchant_rules(merchant_id: str):
+    """
+    Get merchant-specific SLA and baseline rules
+    
+    Returns: Merchant rules or None
+    """
+    query = text("""
+        SELECT
+            merchant_id,
+            sla_minutes,
+            avg_approval_rate
+        FROM merchant_rules
+        WHERE merchant_id = :merchant_id
+    """)
+    
+    async with async_session_maker() as session:
+        result = await session.execute(query, {"merchant_id": merchant_id})
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        return {
+            "merchant_id": row[0],
+            "sla_minutes": row[1],
+            "avg_approval_rate": float(row[2])
+        }
+
+
 async def get_alert_rules(merchant_id: str, country: str = None, provider: str = None):
     """
     Fetch active alert rules for a merchant with optional scope filtering
