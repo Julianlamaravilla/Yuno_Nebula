@@ -76,6 +76,8 @@ services:
       ALERT_THRESHOLD_DECLINE_RATE: ${ALERT_THRESHOLD_DECLINE_RATE:-0.20}
       CHECK_INTERVAL_SECONDS: ${CHECK_INTERVAL_SECONDS:-10}
       AI_AGENT_URL: http://ai-agent:8001
+      EMAIL_SENDER: ${EMAIL_SENDER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
     depends_on:
       db:
         condition: service_healthy

@@ -126,14 +126,14 @@ CREATE INDEX idx_alert_rules_lookup ON alert_rules(merchant_id, filter_country, 
 
 -- Insert KAM
 INSERT INTO kams (name, email) VALUES
-    ('Julián Admin', 'julian.admin@yunosentinel.com');
+    ('Julián Admin', 'restrepojulian015@gmail.com');
 
 -- Get KAM ID for merchant assignment
 DO $$
 DECLARE
     julian_kam_id UUID;
 BEGIN
-    SELECT kam_id INTO julian_kam_id FROM kams WHERE email = 'julian.admin@yunosentinel.com';
+    SELECT kam_id INTO julian_kam_id FROM kams WHERE email = 'restrepojulian015@gmail.com';
 
     -- Insert merchants assigned to Julián
     INSERT INTO merchant_rules (merchant_id, kam_id, sla_minutes, avg_approval_rate) VALUES
