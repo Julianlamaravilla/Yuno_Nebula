@@ -285,6 +285,27 @@ class AnomalyDetector:
             f"{provider} {country} ({affected_count} txns, ${revenue_at_risk:.2f} at risk)"
         )
 
+        # === EMAIL NOTIFICATION TO KAM ===
+        try:
+            kam_info = await self.get_kam_email(merchant_id)
+            if kam_info:
+                await self.send_kam_alert_email(
+                    kam_info=kam_info,
+                    alert_details={
+                        "alert_id": str(alert_id),
+                        "severity": severity,
+                        "title": title,
+                        "revenue_at_risk": float(revenue_at_risk),
+                        "affected_transactions": affected_count,
+                        "llm_explanation": llm_explanation,
+                        "suggested_action": suggested_action
+                    }
+                )
+            else:
+                logger.warning(f"No KAM found for merchant {merchant_id}, email notification skipped")
+        except Exception as e:
+            logger.error(f"Email notification failed (non-fatal): {e}")
+
     async def get_merchant_from_context(self, provider: str, country: str) -> str:
         """
         Get merchant_id from recent transactions for this provider/country context
@@ -550,6 +571,148 @@ class AnomalyDetector:
         except Exception as e:
             logger.error(f"Revenue calculation failed for merchant {merchant_id}: {e}")
             return Decimal("0")
+
+    async def get_kam_email(self, merchant_id: str) -> dict | None:
+        """
+        Get KAM information for a merchant
+
+        Returns:
+            {
+                "kam_name": str,
+                "kam_email": str,
+                "merchant_id": str
+            } or None
+        """
+        try:
+            query = text("""
+                SELECT
+                    k.name,
+                    k.email,
+                    mr.merchant_id
+                FROM merchant_rules mr
+                INNER JOIN kams k ON mr.kam_id = k.kam_id
+                WHERE mr.merchant_id = :merchant_id
+            """)
+
+            async with async_session_maker() as session:
+                result = await session.execute(query, {"merchant_id": merchant_id})
+                row = result.fetchone()
+
+                if row:
+                    return {
+                        "kam_name": row[0],
+                        "kam_email": row[1],
+                        "merchant_id": row[2]
+                    }
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to get KAM for merchant {merchant_id}: {e}")
+            return None
+
+    async def send_kam_alert_email(
+        self,
+        kam_info: dict,
+        alert_details: dict
+    ):
+        """
+        Send email notification to KAM about critical alert
+
+        Args:
+            kam_info: {kam_name, kam_email, merchant_id}
+            alert_details: {alert_id, severity, title, revenue_at_risk, affected_transactions, llm_explanation, suggested_action}
+        """
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            # Check if email credentials are configured
+            if not settings.email_sender or not settings.email_password:
+                logger.warning("Email credentials not configured, skipping notification")
+                return
+
+            # Email subject
+            severity_emoji = "🔴" if alert_details['severity'] == 'CRITICAL' else "⚠️"
+            subject = f"{severity_emoji} [{alert_details['severity']}] {alert_details['title']}"
+
+            # Email body (HTML)
+            severity_color = "#dc2626" if alert_details['severity'] == 'CRITICAL' else "#f59e0b"
+            severity_bg = "#fee2e2" if alert_details['severity'] == 'CRITICAL' else "#fef3c7"
+
+            body = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: {severity_color}; border-left: 4px solid {severity_color}; padding-left: 15px;">
+                        {severity_emoji} Alert Notification
+                    </h2>
+
+                    <p>Hi <strong>{kam_info['kam_name']}</strong>,</p>
+
+                    <p>A <strong style="color: {severity_color};">{alert_details['severity']}</strong> alert has been detected for your merchant
+                    <strong>{kam_info['merchant_id']}</strong>.</p>
+
+                    <div style="background: {severity_bg}; padding: 20px; border-left: 4px solid {severity_color}; margin: 20px 0; border-radius: 4px;">
+                        <h3 style="margin-top: 0; color: {severity_color};">{alert_details['title']}</h3>
+                        <p style="margin: 10px 0;">
+                            <strong>💰 Revenue at Risk:</strong>
+                            <span style="font-size: 18px; color: {severity_color};">${alert_details['revenue_at_risk']:,.2f} USD</span>
+                        </p>
+                        <p style="margin: 10px 0;">
+                            <strong>📊 Affected Transactions:</strong> {alert_details['affected_transactions']}
+                        </p>
+                    </div>
+
+                    <h4 style="color: #374151; margin-top: 25px;">🤖 AI Analysis:</h4>
+                    <div style="background: #f3f4f6; padding: 15px; border-radius: 4px; font-style: italic;">
+                        {alert_details.get('llm_explanation', 'AI analysis not available')}
+                    </div>
+
+                    <h4 style="color: #374151; margin-top: 25px;">💡 Recommended Action:</h4>
+                    <div style="background: #dbeafe; padding: 15px; border-radius: 4px; border-left: 3px solid #3b82f6;">
+                        <strong>{alert_details['suggested_action'].get('label', 'No action specified')}</strong>
+                        <p style="margin: 5px 0 0 0; font-size: 14px; color: #6b7280;">
+                            Type: {alert_details['suggested_action'].get('action_type', 'N/A')}
+                        </p>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+
+                    <div style="font-size: 13px; color: #6b7280;">
+                        <p><strong>Alert ID:</strong> {alert_details['alert_id']}</p>
+                        <p><strong>Timestamp:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                        <p><a href="http://localhost:3000" style="color: #3b82f6; text-decoration: none;">📊 View Dashboard →</a></p>
+                    </div>
+
+                    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center;">
+                        <p>This is an automated notification from <strong>Yuno Sentinel</strong>.</p>
+                        <p>Powered by Gemini AI | Real-time Financial Observability</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = settings.email_sender
+            msg['To'] = kam_info['kam_email']
+            msg.attach(MIMEText(body, 'html'))
+
+            # Send email using Gmail SMTP
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(settings.email_sender, settings.email_password)
+                server.send_message(msg)
+
+            logger.info(
+                f"✅ Email sent to KAM {kam_info['kam_name']} ({kam_info['kam_email']}) "
+                f"for merchant {kam_info['merchant_id']}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to send email to KAM: {e}", exc_info=True)
 
     async def determine_root_cause(
         self,
