@@ -99,16 +99,57 @@ async def get_issuer_breakdown(provider_id: str, minutes: int = 15):
     return await execute_raw_query(query, {"provider_id": provider_id, "minutes": minutes})
 
 
-async def get_merchant_rules(merchant_id: str):
-    """Fetch merchant-specific rules"""
+async def get_alert_rules(merchant_id: str, country: str = None, provider: str = None):
+    """
+    Fetch active alert rules for a merchant with optional scope filtering
+
+    Args:
+        merchant_id: Merchant identifier
+        country: Optional country filter
+        provider: Optional provider filter
+
+    Returns:
+        List of applicable alert rules
+    """
     query = """
-    SELECT sla_minutes, avg_approval_rate
-    FROM merchant_rules
+    SELECT
+        rule_id,
+        rule_name,
+        scope_country,
+        scope_provider,
+        scope_method,
+        metric_type,
+        operator,
+        threshold_value,
+        min_transactions,
+        severity
+    FROM alert_rules
     WHERE merchant_id = :merchant_id
+      AND is_active = TRUE
+      AND (scope_country IS NULL OR scope_country = :country)
+      AND (scope_provider IS NULL OR scope_provider = :provider)
+    ORDER BY severity DESC, threshold_value ASC
     """
 
-    result = await execute_raw_query(query, {"merchant_id": merchant_id})
-    if result:
-        row = result[0]
-        return {"sla_minutes": row[0], "avg_approval_rate": float(row[1])}
-    return {"sla_minutes": 5, "avg_approval_rate": 0.70}  # Defaults
+    result = await execute_raw_query(query, {
+        "merchant_id": merchant_id,
+        "country": country,
+        "provider": provider
+    })
+
+    rules = []
+    for row in result:
+        rules.append({
+            "rule_id": str(row[0]),
+            "rule_name": row[1],
+            "scope_country": row[2],
+            "scope_provider": row[3],
+            "scope_method": row[4],
+            "metric_type": row[5],
+            "operator": row[6],
+            "threshold_value": float(row[7]),
+            "min_transactions": row[8],
+            "severity": row[9]
+        })
+
+    return rules

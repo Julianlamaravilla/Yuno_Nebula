@@ -24,7 +24,7 @@ from collections import defaultdict
 import httpx
 
 from config import settings
-from database import async_session_maker, get_issuer_breakdown, get_merchant_rules
+from database import async_session_maker, get_issuer_breakdown, get_alert_rules
 
 # Configure logging
 logging.basicConfig(
@@ -462,23 +462,54 @@ class AnomalyDetector:
     ) -> tuple[dict, dict]:
         """
         Determine root cause and suggested action
-        Includes HTTP response code analysis
-        
+        Includes HTTP response code analysis with enhanced detection:
+        - 401: Merchant configuration / Invalid API keys
+        - 57: Regulatory/regional blocks
+        - 500/504: Infrastructure failures
+
         Returns: (root_cause_dict, suggested_action_dict)
         """
         # Extract most common error code
         most_common_code = None
         if error_details and error_details.get("most_common_code"):
             most_common_code = error_details["most_common_code"]
-        
-        # Check if issuer-specific
+
+        # Priority 1: Check for merchant configuration errors (401)
+        if most_common_code == "401":
+            root_cause = {
+                "provider": provider,
+                "issue": "Merchant Configuration Error - Invalid API Credentials",
+                "scope": f"All {provider} transactions",
+                "response_code": "401"
+            }
+            suggested_action = {
+                "label": f"Update API Keys for {provider}",
+                "action_type": "UPDATE_CREDENTIALS"
+            }
+            return root_cause, suggested_action
+
+        # Priority 2: Check for regulatory blocks (57)
+        if most_common_code == "57":
+            root_cause = {
+                "provider": provider,
+                "issue": f"Regulatory/Regional Block in {country}",
+                "scope": f"Transactions not permitted in {country}",
+                "response_code": "57"
+            }
+            suggested_action = {
+                "label": f"Review Country Rules for {country}",
+                "action_type": "REVIEW_COMPLIANCE"
+            }
+            return root_cause, suggested_action
+
+        # Priority 3: Check if issuer-specific (infrastructure)
         if issuer_breakdown and len(issuer_breakdown) == 1:
             # Single issuer problem
             issuer = issuer_breakdown[0]
             issue_desc = f"Elevated errors for {issuer['issuer_name']} cards"
             if most_common_code:
                 issue_desc += f" (HTTP {most_common_code})"
-            
+
             root_cause = {
                 "provider": provider,
                 "issue": issue_desc,
@@ -494,14 +525,14 @@ class AnomalyDetector:
             issue_desc = f"{alert_type.replace('_', ' ')} across {country}"
             if most_common_code:
                 issue_desc += f" (HTTP {most_common_code})"
-            
+
             root_cause = {
                 "provider": provider,
                 "issue": issue_desc,
                 "scope": "All transactions",
                 "response_code": most_common_code
             }
-            
+
             # Determine action based on error code
             if most_common_code in ["504", "503", "502"]:
                 action_label = f"Increase timeout or failover {provider}"
@@ -512,7 +543,7 @@ class AnomalyDetector:
             else:
                 action_label = f"Pause traffic to {provider}"
                 action_type = "PAUSE_TRAFFIC"
-            
+
             suggested_action = {
                 "label": action_label,
                 "action_type": action_type
