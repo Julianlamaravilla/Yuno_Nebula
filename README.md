@@ -49,7 +49,9 @@ Yuno Sentinel is a payment transaction monitoring platform that detects anomalie
 | **redis** | Redis 7 | 6379 | Sliding window metrics |
 | **ingestor** | FastAPI | 8000 | Transaction ingestion API |
 | **worker** | Python | - | Anomaly detection engine |
+| **ai-agent** | FastAPI | 8001 | LLM-powered alert generation |
 | **simulator** | Python + Faker | - | Transaction generator with chaos |
+| **dashboard** | React + Vite | 3000 | Real-time monitoring UI |
 
 ## 🚀 Quick Start
 
@@ -64,8 +66,8 @@ Yuno Sentinel is a payment transaction monitoring platform that detects anomalie
 git clone <repo>
 cd Yuno_Nebula
 
-# Copy environment template
-cp .env.example .env
+# Run setup script (fixes permissions & creates .env)
+./setup.sh
 
 # Edit .env and add your API key
 nano .env
@@ -76,14 +78,27 @@ nano .env
 
 ```bash
 # Start all services
-docker-compose up -d
+docker-compose up --build -d
 
 # Check health
 docker-compose ps
 curl http://localhost:8000/health
 ```
 
-### 3. Monitor Logs
+### 3. Access Dashboard
+
+Open your browser and navigate to:
+```
+http://localhost:3000
+```
+
+The dashboard features:
+- 🚨 **Revenue at Risk KPI** - Total USD at risk in RED
+- 📊 **Approval Rate Timeline** - Real-time health chart
+- 🔔 **Alert Feed** - LLM-generated explanations with action buttons
+- 🔄 **Auto-refresh** - Updates every 5 seconds
+
+### 4. Monitor Logs
 
 ```bash
 # Watch worker detecting anomalies
@@ -94,6 +109,9 @@ docker-compose logs -f simulator
 
 # Watch API ingestion
 docker-compose logs -f ingestor
+
+# Watch AI agent generating explanations
+docker-compose logs -f ai-agent
 ```
 
 ## 🎮 Usage Examples
@@ -276,13 +294,26 @@ python main.py
 | Throughput | 100 TPS | ✅ 120 TPS |
 | False Positive Rate | < 5% | ✅ 3% |
 
-## 🔮 Phase 2: React Frontend
+## ✅ Phase 2: React Frontend - COMPLETED
 
-Coming soon:
-- Real-time monitoring dashboard (React + Tailwind + Vite)
-- Alert management UI
+The real-time monitoring dashboard is now live at `http://localhost:3000`
+
+**Features Implemented:**
+- ✅ Real-time monitoring dashboard (React + Tailwind + Vite)
+- ✅ Revenue at Risk KPI with dramatic RED display
+- ✅ Approval Rate timeline chart (using Recharts)
+- ✅ Alert feed with LLM-generated explanations
+- ✅ Action buttons for each alert
+- ✅ Auto-refresh every 5 seconds
+- ✅ Severity-based color coding (CRITICAL/WARNING)
+- ✅ Confidence scores and affected transaction counts
+- ✅ Root cause breakdown (provider, issuer, scope)
+
+**Future Enhancements:**
 - Issuer heatmaps
 - Manual failover controls
+- Alert history and filtering
+- Provider comparison charts
 
 ## 📝 License
 
