@@ -11,6 +11,7 @@ import redis.asyncio as redis
 import logging
 import json
 from typing import Dict, List
+from pydantic import BaseModel
 
 from schemas import PaymentEvent, convert_to_usd, AlertRuleCreate, AlertRuleResponse
 from database import get_db, check_db_connection
@@ -100,23 +101,9 @@ async def ingest_transaction(
     payment: PaymentEvent,
     db: AsyncSession = Depends(get_db)
 ) -> Dict[str, str]:
-    """
-    Ingest payment transaction event
-
-    Process:
-    1. Validate payload (Pydantic)
-    2. Convert amount to USD
-    3. Insert into PostgreSQL events_log
-    4. Update Redis sliding window counters
-    5. Return success
-
-    Performance Target: < 50ms p99 latency
-    """
     try:
-        # Step 1: Calculate USD amount
         amount_usd = convert_to_usd(payment.amount.value, payment.amount.currency)
 
-        # Step 2: Prepare database insert
         event_data = {
             "merchant_id": payment.merchant_id,
             "provider_id": payment.provider_data.id,
@@ -125,7 +112,6 @@ async def ingest_transaction(
             "raw_payload": json.dumps(payment.model_dump(mode='json'))
         }
 
-        # Step 3: Insert into PostgreSQL
         insert_query = text("""
             INSERT INTO events_log (merchant_id, provider_id, status, amount_usd, raw_payload)
             VALUES (:merchant_id, :provider_id, :status, :amount_usd, :raw_payload)
@@ -136,7 +122,6 @@ async def ingest_transaction(
         await db.commit()
         event_id = result.scalar_one()
 
-        # Step 4: Update Redis counters (async pipeline for speed)
         if redis_client:
             await update_redis_metrics(payment)
 
@@ -160,80 +145,69 @@ async def ingest_transaction(
 async def update_redis_metrics(payment: PaymentEvent):
     """
     Update Redis sliding window counters
-
-    Key Pattern: stats:{merchant_id}:{country}:{provider}:{status}:{minute_window}
-    Example: stats:merchant_shopito:MX:STRIPE:ERROR:202412131430
-
-    Uses Redis pipeline for atomic multi-key updates
+    New Pattern: stats:{merchant_id}:{country}:{provider}:{status}:{minute_window}
     """
     try:
-        # Generate minute window key
         timestamp = payment.created_at
         minute_window = timestamp.strftime("%Y%m%d%H%M")
 
-        # Build Redis key with merchant_id
         redis_key = f"stats:{payment.merchant_id}:{payment.country}:{payment.provider_data.id}:{payment.status}:{minute_window}"
 
-        # Use pipeline for atomic operations
         async with redis_client.pipeline() as pipe:
-            # Increment counter
             pipe.incr(redis_key)
-            # Set expiration (1 hour TTL)
             pipe.expire(redis_key, settings.redis_key_ttl_seconds)
             await pipe.execute()
 
-        logger.debug(f"Updated Redis metric: {redis_key}")
-
     except Exception as e:
-        # Non-fatal: Redis is for real-time metrics, not critical path
         logger.warning(f"Redis update failed (non-fatal): {e}")
 
-
-# En backend/main.py
 
 @app.get("/metrics/recent")
 async def get_recent_metrics(minutes: int = 30):
     """
     Get time-series metrics from Redis for the chart
-    Returns: List of data points sorted by time
+    Updated to handle the new key pattern with merchant_id
     """
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis unavailable")
 
     try:
-        # Scan stats keys
         pattern = "stats:*"
         keys = []
         async for key in redis_client.scan_iter(match=pattern):
             keys.append(key)
 
-        # Agrupar por minuto (Time Series)
-        # Key format: stats:{country}:{provider}:{status}:{minute_window}
-        # minute_window is YYYYMMDDHHMM
         time_series = {}
 
         for key in keys:
             count = await redis_client.get(key)
             parts = key.split(":")
-            if len(parts) == 5:
-                status = parts[3]       # ERROR, SUCCEEDED, DECLINED
-                minute_str = parts[4]   # 202512140038
+            
+            # FIX: Handle new key format (6 parts)
+            # stats:{merchant_id}:{country}:{provider}:{status}:{minute}
+            if len(parts) >= 6:
+                status = parts[4]       # Index 4 is status
+                minute_str = parts[5]   # Index 5 is minute timestamp
+            # Fallback for old keys (5 parts) just in case
+            elif len(parts) == 5:
+                status = parts[3]
+                minute_str = parts[4]
+            else:
+                continue
 
-                if minute_str not in time_series:
-                    time_series[minute_str] = {"total": 0, "errors": 0, "success": 0}
-                
-                val = int(count or 0)
-                time_series[minute_str]["total"] += val
-                
-                if status == "ERROR" or status == "DECLINED":
-                    time_series[minute_str]["errors"] += val
-                elif status == "SUCCEEDED":
-                    time_series[minute_str]["success"] += val
+            if minute_str not in time_series:
+                time_series[minute_str] = {"total": 0, "errors": 0, "success": 0}
+            
+            val = int(count or 0)
+            time_series[minute_str]["total"] += val
+            
+            if status == "ERROR" or status == "DECLINED":
+                time_series[minute_str]["errors"] += val
+            elif status == "SUCCEEDED":
+                time_series[minute_str]["success"] += val
 
-        # Convertir a lista ordenada para el Frontend
         chart_data = []
         for minute, data in sorted(time_series.items()):
-            # Parsear fecha "202512140038" a ISO
             try:
                 dt = datetime.strptime(minute, "%Y%m%d%H%M")
                 approval_rate = (data["success"] / data["total"] * 100) if data["total"] > 0 else 0
@@ -247,24 +221,31 @@ async def get_recent_metrics(minutes: int = 30):
             except ValueError:
                 continue
 
-        # Retornar una LISTA (Array), no un objeto
-        return chart_data[-minutes:] # Retornar los ultimos N minutos
+        return chart_data[-minutes:]
 
     except Exception as e:
         logger.error(f"Metrics query failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch metrics")
 
 
+# === ENDPOINT RESTAURADO PARA EL FRONTEND ===
+class ResolveAlertRequest(BaseModel):
+    alert_id: str
+    action_type: str | None = None
+
+@app.post("/simulation/resolve")
+async def resolve_alert_simulation(request: ResolveAlertRequest):
+    """
+    Dummy endpoint to handle 'Resolve' clicks from Frontend.
+    In a real scenario, this would trigger a playbook.
+    """
+    logger.info(f"Resolving alert {request.alert_id} with action {request.action_type}")
+    return {"status": "resolved", "message": "Action executed successfully"}
+# ============================================
+
+
 @app.get("/alerts")
 async def get_alerts(limit: int = 10, db: AsyncSession = Depends(get_db)):
-    """
-    Get recent alerts from database
-
-    Query Parameters:
-        limit: Number of alerts to return (default: 10)
-
-    Returns list of alerts with LLM explanations
-    """
     try:
         query = text("""
             SELECT
@@ -289,7 +270,6 @@ async def get_alerts(limit: int = 10, db: AsyncSession = Depends(get_db)):
 
         alerts = []
         for row in rows:
-            # Parse JSONB fields
             root_cause = row[8]
             if isinstance(root_cause, str):
                 root_cause = json.loads(root_cause)
@@ -324,15 +304,6 @@ async def create_alert_rule(
     rule: AlertRuleCreate,
     db: AsyncSession = Depends(get_db)
 ) -> AlertRuleResponse:
-    """
-    Create new alert rule
-
-    Parameters:
-        rule: Alert rule configuration
-
-    Returns:
-        Created alert rule with rule_id
-    """
     try:
         query = text("""
             INSERT INTO alert_rules (
@@ -364,23 +335,7 @@ async def create_alert_rule(
                 :end_hour,
                 :severity
             )
-            RETURNING
-                rule_id,
-                merchant_id,
-                rule_name,
-                filter_country,
-                filter_provider,
-                filter_issuer,
-                metric_type,
-                operator,
-                threshold_value,
-                min_transactions,
-                is_time_based,
-                start_hour,
-                end_hour,
-                severity,
-                is_active,
-                created_at
+            RETURNING *
         """)
 
         result = await db.execute(query, {
@@ -399,11 +354,9 @@ async def create_alert_rule(
             "severity": rule.severity
         })
         await db.commit()
-
         row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=500, detail="Failed to create rule")
-
+        
+        # Mapping row directly to response (SQLAlchemy row to Pydantic)
         return AlertRuleResponse(
             rule_id=row[0],
             merchant_id=row[1],
@@ -435,18 +388,7 @@ async def get_alert_rules(
     is_active: bool | None = True,
     db: AsyncSession = Depends(get_db)
 ) -> List[AlertRuleResponse]:
-    """
-    Get alert rules with optional filters
-
-    Query Parameters:
-        merchant_id: Filter by merchant ID (optional)
-        is_active: Filter by active status (default: True, set to None for all)
-
-    Returns:
-        List of alert rules
-    """
     try:
-        # Build dynamic query
         where_clauses = []
         params = {}
 
@@ -460,29 +402,7 @@ async def get_alert_rules(
 
         where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
-        query = text(f"""
-            SELECT
-                rule_id,
-                merchant_id,
-                rule_name,
-                filter_country,
-                filter_provider,
-                filter_issuer,
-                metric_type,
-                operator,
-                threshold_value,
-                min_transactions,
-                is_time_based,
-                start_hour,
-                end_hour,
-                severity,
-                is_active,
-                created_at
-            FROM alert_rules
-            {where_sql}
-            ORDER BY created_at DESC
-        """)
-
+        query = text(f"SELECT * FROM alert_rules {where_sql} ORDER BY created_at DESC")
         result = await db.execute(query, params)
         rows = result.fetchall()
 
@@ -506,7 +426,6 @@ async def get_alert_rules(
                 is_active=row[14],
                 created_at=row[15]
             ))
-
         return rules
 
     except Exception as e:
@@ -515,70 +434,27 @@ async def get_alert_rules(
 
 
 @app.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_alert_rule(
-    rule_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Delete alert rule by ID (soft delete - sets is_active to False)
-
-    Path Parameters:
-        rule_id: UUID of the rule to delete
-
-    Returns:
-        204 No Content on success
-    """
+async def delete_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
     try:
-        # Validate UUID format
-        from uuid import UUID
-        try:
-            UUID(rule_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid rule_id format (must be UUID)")
-
-        # Soft delete by setting is_active to False
-        query = text("""
-            UPDATE alert_rules
-            SET is_active = FALSE
-            WHERE rule_id = :rule_id
-            RETURNING rule_id
-        """)
-
+        query = text("UPDATE alert_rules SET is_active = FALSE WHERE rule_id = :rule_id RETURNING rule_id")
         result = await db.execute(query, {"rule_id": rule_id})
         await db.commit()
-
-        row = result.fetchone()
-        if not row:
+        if not result.fetchone():
             raise HTTPException(status_code=404, detail="Alert rule not found")
-
-        logger.info(f"Alert rule {rule_id} deactivated successfully")
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Alert rule deletion failed: {e}")
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete alert rule: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {
         "service": "Yuno Sentinel Ingestor",
         "status": "operational",
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "/health",
-            "ingest": "POST /ingest",
-            "metrics": "/metrics/recent?minutes=5",
-            "alerts": "GET /alerts",
-            "rules": {
-                "create": "POST /rules",
-                "list": "GET /rules?merchant_id=xxx&is_active=true",
-                "delete": "DELETE /rules/{rule_id}"
-            }
-        }
+        "version": "1.0.0"
     }
 
 
