@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw } from 'lucide-react';
+import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw, Settings } from 'lucide-react';
 import AlertCard from './components/AlertCard';
 import MetricsChart from './components/MetricsChart';
+import RuleSettings from './components/RuleSettings';
 
 function App() {
   const [alerts, setAlerts] = useState([]);
   const [totalRevenueAtRisk, setTotalRevenueAtRisk] = useState(0);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [showSettings, setShowSettings] = useState(false);
 
   const fetchAlerts = async () => {
     try {
@@ -70,6 +72,13 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-4">
+              <button
+                onClick={() => setShowSettings(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors border border-blue-200"
+              >
+                <Settings size={16} />
+                <span className="text-sm font-medium">Rule Settings</span>
+              </button>
               <div className="text-right">
                 <div className="text-xs text-slate-500">Last updated</div>
                 <div className="text-sm text-slate-700 font-medium tabular-nums flex items-center gap-1.5">
@@ -217,6 +226,9 @@ function App() {
           </p>
         </div>
       </footer>
+
+      {/* Settings Modal */}
+      <RuleSettings isOpen={showSettings} onClose={() => setShowSettings(false)} />
     </div>
   );
 }
