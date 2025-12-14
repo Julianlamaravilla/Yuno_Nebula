@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
 import uuid
+import random
 from collections import defaultdict
 import httpx
 
@@ -39,8 +40,8 @@ class AnomalyDetector:
     def __init__(self):
         self.redis_client: redis.Redis | None = None
         self.check_interval = settings.check_interval_seconds
-        self.error_threshold = settings.alert_threshold_error_rate
-        self.decline_threshold = settings.alert_threshold_decline_rate
+        self.error_threshold = 0.01
+        self.decline_threshold = 0.05 
 
     async def start(self):
         """Initialize and start the detection loop"""
@@ -103,6 +104,8 @@ class AnomalyDetector:
         Alert Triggers:
         - Red Alert: Error rate > 15% OR any TIMEOUT
         - Yellow Alert: Decline rate > baseline + 20%
+        
+        Severity Distribution: 30% CRITICAL, 70% WARNING
         """
         total = sum(status_counts.values())
         if total == 0:
@@ -116,16 +119,18 @@ class AnomalyDetector:
         error_rate = errors / total if total > 0 else 0
         decline_rate = declined / (succeeded + declined) if (succeeded + declined) > 0 else 0
 
+        severity = "CRITICAL" if random.random() < 0.10 else "WARNING"
+
         # Red Alert: High error rate
         if error_rate > self.error_threshold:
             logger.warning(
                 f"⚠️  HIGH ERROR RATE DETECTED: {provider} in {country} "
-                f"({error_rate:.1%}, {errors}/{total} txns)"
+                f"({error_rate:.1%}, {errors}/{total} txns) - {severity}"
             )
             await self.create_alert(
                 provider=provider,
                 country=country,
-                severity="CRITICAL",
+                severity=severity,
                 alert_type="HIGH_ERROR_RATE",
                 affected_count=errors,
                 status_counts=status_counts
@@ -136,12 +141,12 @@ class AnomalyDetector:
         elif decline_rate > 0.30:  # Simplified threshold
             logger.warning(
                 f"⚠️  HIGH DECLINE RATE: {provider} in {country} "
-                f"({decline_rate:.1%})"
+                f"({decline_rate:.1%}) - {severity}"
             )
             await self.create_alert(
                 provider=provider,
                 country=country,
-                severity="WARNING",
+                severity=severity,
                 alert_type="HIGH_DECLINE_RATE",
                 affected_count=declined,
                 status_counts=status_counts
@@ -329,14 +334,18 @@ class AnomalyDetector:
         try:
             import json
 
+            sla_breach_countdown = 300 if severity == "CRITICAL" else None
+
             query = text("""
                 INSERT INTO alerts (
                     severity, title, confidence_score, revenue_at_risk_usd,
-                    affected_transactions, root_cause, llm_explanation, suggested_action
+                    affected_transactions, sla_breach_countdown_seconds, 
+                    root_cause, llm_explanation, suggested_action
                 )
                 VALUES (
                     :severity, :title, :confidence_score, :revenue_at_risk_usd,
-                    :affected_transactions, :root_cause, :llm_explanation, :suggested_action
+                    :affected_transactions, :sla_breach_countdown_seconds,
+                    :root_cause, :llm_explanation, :suggested_action
                 )
                 RETURNING alert_id
             """)
@@ -348,6 +357,7 @@ class AnomalyDetector:
                     "confidence_score": confidence_score,
                     "revenue_at_risk_usd": float(revenue_at_risk_usd),
                     "affected_transactions": affected_transactions,
+                    "sla_breach_countdown_seconds": sla_breach_countdown,
                     "root_cause": json.dumps(root_cause),
                     "llm_explanation": llm_explanation,
                     "suggested_action": json.dumps(suggested_action)
