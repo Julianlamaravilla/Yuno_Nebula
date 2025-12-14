@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw } from 'lucide-react';
 import AlertCard from './components/AlertCard';
 import MetricsChart from './components/MetricsChart';
 
@@ -12,7 +13,7 @@ function App() {
   const fetchAlerts = async () => {
     try {
       const response = await axios.get('/api/alerts');
-      const alertsData = response.data;
+      const alertsData = response.data.alerts || response.data;
 
       setAlerts(alertsData);
 
@@ -26,59 +27,13 @@ function App() {
       setLoading(false);
     } catch (error) {
       console.error('Error fetching alerts:', error);
-      // Use mock data for development
-      setAlerts(getMockAlerts());
-      setTotalRevenueAtRisk(12450.75);
       setLoading(false);
     }
   };
 
-  const getMockAlerts = () => {
-    return [
-      {
-        alert_id: '1',
-        title: 'STRIPE MX - BBVA Timeout Spike',
-        severity: 'CRITICAL',
-        confidence_score: 0.92,
-        revenue_at_risk_usd: 8750.25,
-        affected_transactions: 124,
-        created_at: new Date().toISOString(),
-        llm_explanation: 'Critical anomaly detected: Stripe Mexico is experiencing 78% timeout rate specifically for BBVA-issued cards. This appears to be an issuer-specific connectivity issue affecting high-value transactions. Immediate action required to prevent SLA breach.',
-        root_cause: {
-          provider: 'STRIPE',
-          scope: 'Issuer-Specific (BBVA)',
-          issue: 'TIMEOUT'
-        },
-        suggested_action: {
-          label: 'Switch to DLOCAL for BBVA cards',
-          action_type: 'FAILOVER_PROVIDER'
-        }
-      },
-      {
-        alert_id: '2',
-        title: 'Unusual Decline Rate - merchant_shopito',
-        severity: 'WARNING',
-        confidence_score: 0.85,
-        revenue_at_risk_usd: 3700.50,
-        affected_transactions: 67,
-        created_at: new Date(Date.now() - 120000).toISOString(),
-        llm_explanation: 'Decline rate for merchant_shopito has increased by 35% above baseline. Analysis shows concentration of INSUFFICIENT_FUNDS responses, suggesting potential fraud prevention overreaction or legitimate customer payment method issues.',
-        root_cause: {
-          provider: 'ADYEN',
-          scope: 'Merchant-Wide',
-          issue: 'INSUFFICIENT_FUNDS'
-        },
-        suggested_action: {
-          label: 'Review fraud rules configuration',
-          action_type: 'TUNE_RULES'
-        }
-      }
-    ];
-  };
-
   useEffect(() => {
     fetchAlerts();
-    const interval = setInterval(fetchAlerts, 5000); // Auto-refresh every 5 seconds
+    const interval = setInterval(fetchAlerts, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -86,35 +41,45 @@ function App() {
     return alerts.filter(alert => alert.severity === severity).length;
   };
 
+  const criticalCount = getAlertCountBySeverity('CRITICAL');
+  const warningCount = getAlertCountBySeverity('WARNING');
+  const healthScore = alerts.length === 0 ? 100 : Math.max(0, 100 - (criticalCount * 20 + warningCount * 10));
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0e1a]">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-400 text-lg">Loading Yuno Sentinel Dashboard...</p>
+          <Activity size={40} className="text-blue-500 animate-pulse mx-auto mb-4" />
+          <p className="text-gray-400 text-sm font-medium">Initializing Sentinel...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-900">
+    <div className="min-h-screen bg-[#0a0e1a]">
       {/* Header */}
-      <header className="bg-gray-800 border-b border-gray-700 shadow-lg">
+      <header className="bg-gray-900 border-b border-gray-800">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-                🛡️ Yuno Sentinel
-              </h1>
-              <p className="text-sm text-gray-400 mt-1">
-                Real-time Financial Observability & Self-Healing Platform
-              </p>
+            <div className="flex items-center gap-3">
+              <Shield size={28} className="text-blue-500" />
+              <div>
+                <h1 className="text-xl font-semibold text-gray-100">Yuno Sentinel</h1>
+                <p className="text-xs text-gray-500">Real-time Financial Observability Platform</p>
+              </div>
             </div>
-            <div className="text-right">
-              <div className="text-xs text-gray-500">Last updated</div>
-              <div className="text-sm text-gray-300">
-                {lastUpdate.toLocaleTimeString()}
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <div className="text-xs text-gray-500">Last updated</div>
+                <div className="text-sm text-gray-300 font-medium tabular-nums flex items-center gap-1.5">
+                  <RefreshCw size={12} className="text-gray-500" />
+                  {lastUpdate.toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -123,55 +88,82 @@ function App() {
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         {/* KPI Section */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          {/* Revenue at Risk - LARGE and RED */}
-          <div className="md:col-span-2 bg-gradient-to-br from-red-900 to-red-800 border-2 border-red-500 rounded-lg p-6 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-red-200 uppercase tracking-wide mb-2">
-                  💰 Revenue at Risk
-                </h3>
-                <div className="text-5xl font-black text-white mb-1">
-                  ${totalRevenueAtRisk.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+          {/* Revenue at Risk - Prominent */}
+          <div className="md:col-span-2 bg-gradient-to-br from-red-950/30 to-red-900/20 border border-red-900/50 rounded-lg p-6 shadow-sm">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <DollarSign size={18} className="text-red-400" />
+                  <h3 className="text-xs font-medium text-red-300 uppercase tracking-wide">
+                    Revenue at Risk
+                  </h3>
                 </div>
-                <p className="text-xs text-red-200">
-                  Across {alerts.length} active {alerts.length === 1 ? 'alert' : 'alerts'}
+                <div className="text-4xl font-bold text-red-400 tabular-nums mb-1">
+                  ${totalRevenueAtRisk.toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })}
+                </div>
+                <p className="text-xs text-red-300/70">
+                  {alerts.length} active {alerts.length === 1 ? 'incident' : 'incidents'}
                 </p>
               </div>
-              <div className="text-6xl">🚨</div>
             </div>
           </div>
 
           {/* Active Alerts */}
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 shadow-lg">
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">
-              Active Alerts
-            </h3>
-            <div className="text-4xl font-bold text-white mb-1">
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle size={16} className="text-gray-500" />
+              <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                Active Alerts
+              </h3>
+            </div>
+            <div className="text-3xl font-bold text-gray-100 tabular-nums mb-2">
               {alerts.length}
             </div>
-            <div className="flex gap-3 text-xs mt-2">
-              <span className="text-red-400">
-                🔴 {getAlertCountBySeverity('CRITICAL')} Critical
-              </span>
-              <span className="text-yellow-400">
-                🟡 {getAlertCountBySeverity('WARNING')} Warning
-              </span>
+            <div className="flex flex-col gap-1 text-xs">
+              {criticalCount > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                  <span className="text-red-400 font-medium">{criticalCount} Critical</span>
+                </div>
+              )}
+              {warningCount > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                  <span className="text-yellow-400 font-medium">{warningCount} Warning</span>
+                </div>
+              )}
+              {alerts.length === 0 && (
+                <span className="text-gray-500">No incidents</span>
+              )}
             </div>
           </div>
 
           {/* System Health */}
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 shadow-lg">
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">
-              System Health
-            </h3>
-            <div className="text-4xl font-bold text-green-400 mb-1">
-              {alerts.length === 0 ? '100%' : alerts.some(a => a.severity === 'CRITICAL') ? '45%' : '78%'}
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity size={16} className="text-gray-500" />
+              <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                System Health
+              </h3>
             </div>
-            <div className="flex items-center gap-2 text-xs mt-2">
-              <div className={`w-2 h-2 rounded-full ${alerts.some(a => a.severity === 'CRITICAL') ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
-              <span className="text-gray-400">
-                {alerts.some(a => a.severity === 'CRITICAL') ? 'Degraded' : 'Operational'}
+            <div className={`text-3xl font-bold tabular-nums mb-2 ${
+              healthScore >= 80 ? 'text-green-400' :
+              healthScore >= 60 ? 'text-yellow-400' : 'text-red-400'
+            }`}>
+              {healthScore}%
+            </div>
+            <div className="flex items-center gap-2">
+              <div className={`w-1.5 h-1.5 rounded-full ${
+                healthScore >= 80 ? 'bg-green-500' :
+                healthScore >= 60 ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
+              }`} />
+              <span className="text-xs text-gray-500">
+                {healthScore >= 80 ? 'Operational' :
+                 healthScore >= 60 ? 'Degraded' : 'Critical'}
               </span>
             </div>
           </div>
@@ -184,21 +176,31 @@ function App() {
 
         {/* Alerts Feed */}
         <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-white">🚨 Alert Feed</h2>
-            <div className="text-sm text-gray-400">
-              {alerts.length === 0 ? 'No active alerts' : `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} requiring attention`}
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
+              <AlertTriangle size={20} />
+              Alert Feed
+            </h2>
+            <div className="text-sm text-gray-500">
+              {alerts.length === 0 ? (
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 size={14} className="text-green-500" />
+                  No active incidents
+                </span>
+              ) : (
+                `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} requiring attention`
+              )}
             </div>
           </div>
 
           {alerts.length === 0 ? (
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-12 text-center">
-              <div className="text-6xl mb-4">✅</div>
-              <h3 className="text-xl font-bold text-green-400 mb-2">All Systems Operational</h3>
-              <p className="text-gray-400">No anomalies detected in the last 15 minutes</p>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-12 text-center">
+              <CheckCircle2 size={48} className="text-green-500/50 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-green-400 mb-2">All Systems Operational</h3>
+              <p className="text-sm text-gray-500">No anomalies detected in recent monitoring window</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               {alerts.map((alert) => (
                 <AlertCard key={alert.alert_id} alert={alert} />
               ))}
@@ -208,9 +210,11 @@ function App() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-gray-800 border-t border-gray-700 mt-12">
-        <div className="max-w-7xl mx-auto px-6 py-4 text-center text-xs text-gray-500">
-          <p>Yuno Sentinel - Powered by Gemini AI | Auto-refreshing every 5 seconds</p>
+      <footer className="bg-gray-900 border-t border-gray-800 mt-12">
+        <div className="max-w-7xl mx-auto px-6 py-4 text-center">
+          <p className="text-xs text-gray-600">
+            Yuno Sentinel v1.0 · Powered by Gemini AI · Auto-refresh: 5s
+          </p>
         </div>
       </footer>
     </div>
