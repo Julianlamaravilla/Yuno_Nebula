@@ -21,11 +21,16 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
 
-    # Alert Thresholds
-    alert_threshold_error_rate: float = 0.20  # 20%
+    # Alert Thresholds - Smart Detection
+    alert_threshold_error_rate: float = 0.10  # 10% error rate (more sensitive)
     alert_threshold_decline_rate: float = 0.50  # 50% decline rate
-    min_transactions_for_alert: int = 50  # Minimum sample size
+    min_transactions_for_alert: int = 30  # Minimum sample size
     alert_cooldown_seconds: int = 600  # 10 minutes between duplicate alerts
+    
+    # Trend Detection (anti-false positive)
+    min_consecutive_errors: int = 8  # Minimum consecutive errors to trigger alert
+    error_trend_window_minutes: int = 10  # Time window to check trend
+    recovery_check_threshold: int = 5  # Successful txns needed to mark as recovered
 
     # Worker Configuration
     check_interval_seconds: int = 10

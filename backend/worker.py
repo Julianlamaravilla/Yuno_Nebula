@@ -35,13 +35,17 @@ logger = logging.getLogger(__name__)
 
 
 class AnomalyDetector:
-    """Real-time anomaly detection engine"""
+    """Real-time anomaly detection engine with smart trend detection"""
 
     def __init__(self):
         self.redis_client: redis.Redis | None = None
         self.check_interval = settings.check_interval_seconds
-        self.error_threshold = 0.20
-        self.decline_threshold = 0.50 
+        self.error_threshold = settings.alert_threshold_error_rate
+        self.decline_threshold = settings.alert_threshold_decline_rate
+        
+        # Track alert history to prevent duplicates and false positives
+        self.active_alerts = {}  # {(provider, country, type): timestamp}
+        self.recent_errors = defaultdict(list)  # Track error patterns 
 
     async def start(self):
         """Initialize and start the detection loop"""
@@ -99,16 +103,16 @@ class AnomalyDetector:
 
     async def analyze_provider(self, country: str, provider: str, status_counts: dict):
         """
-        Analyze metrics for a specific provider/country
-
-        Alert Triggers:
-        - Red Alert: Error rate > 15% OR any TIMEOUT
-        - Yellow Alert: Decline rate > baseline + 20%
+        Analyze metrics for a specific provider/country with smart trend detection
         
-        Severity Distribution: 30% CRITICAL, 70% WARNING
+        NEW LOGIC:
+        1. Detect error trends (not isolated incidents)
+        2. Check response codes for specific HTTP errors
+        3. Verify errors are persistent before alerting
+        4. Auto-resolve if recovered
         """
         total = sum(status_counts.values())
-        if total == 0:
+        if total < settings.min_transactions_for_alert:
             return
 
         succeeded = status_counts.get("SUCCEEDED", 0)
@@ -119,38 +123,67 @@ class AnomalyDetector:
         error_rate = errors / total if total > 0 else 0
         decline_rate = declined / (succeeded + declined) if (succeeded + declined) > 0 else 0
 
-        severity = "CRITICAL" if error_rate > 0.30 or decline_rate > 0.60 else "WARNING"
+        # Check if error trend is persistent (anti-false positive)
+        is_persistent_error = await self.check_error_trend(provider, country, errors, total)
+        
+        # Check for recovery (if previously alerted, verify issue persists)
+        is_recovered = await self.check_recovery(provider, country, succeeded)
+        alert_key = (provider, country, "HIGH_ERROR_RATE")
+        
+        if is_recovered and alert_key in self.active_alerts:
+            logger.info(f"✅ RECOVERY: {provider} in {country} has recovered")
+            del self.active_alerts[alert_key]
+            return
 
-        # Red Alert: High error rate
-        if error_rate > self.error_threshold:
-            logger.warning(
-                f"⚠️  HIGH ERROR RATE DETECTED: {provider} in {country} "
-                f"({error_rate:.1%}, {errors}/{total} txns) - {severity}"
-            )
-            await self.create_alert(
-                provider=provider,
-                country=country,
-                severity=severity,
-                alert_type="HIGH_ERROR_RATE",
-                affected_count=errors,
-                status_counts=status_counts
-            )
+        # Red Alert: High error rate WITH persistent trend
+        if error_rate > self.error_threshold and is_persistent_error:
+            # Check if already alerted recently
+            if self.should_alert(provider, country, "HIGH_ERROR_RATE"):
+                # Get detailed error breakdown (response codes)
+                error_details = await self.get_error_code_breakdown(provider, country)
+                
+                severity = "CRITICAL" if error_rate > 0.30 else "WARNING"
+                
+                logger.warning(
+                    f"🚨 PERSISTENT ERROR DETECTED: {provider} in {country} "
+                    f"({error_rate:.1%}, {errors}/{total} txns) - {severity}"
+                    f"\n   Response codes: {error_details.get('response_codes', {})}"
+                )
+                
+                await self.create_alert(
+                    provider=provider,
+                    country=country,
+                    severity=severity,
+                    alert_type="HIGH_ERROR_RATE",
+                    affected_count=errors,
+                    status_counts=status_counts,
+                    error_details=error_details
+                )
+                
+                self.active_alerts[alert_key] = datetime.now()
 
         # Yellow Alert: Elevated decline rate
-        # TODO: Fetch merchant baseline and compare
-        elif decline_rate > self.decline_threshold:  # Simplified threshold
-            logger.warning(
-                f"⚠️  HIGH DECLINE RATE: {provider} in {country} "
-                f"({decline_rate:.1%}) - {severity}"
-            )
-            await self.create_alert(
-                provider=provider,
-                country=country,
-                severity=severity,
-                alert_type="HIGH_DECLINE_RATE",
-                affected_count=declined,
-                status_counts=status_counts
-            )
+        elif decline_rate > self.decline_threshold:
+            alert_key_decline = (provider, country, "HIGH_DECLINE_RATE")
+            
+            if self.should_alert(provider, country, "HIGH_DECLINE_RATE"):
+                severity = "WARNING"
+                
+                logger.warning(
+                    f"⚠️  HIGH DECLINE RATE: {provider} in {country} "
+                    f"({decline_rate:.1%}, {declined} declined) - {severity}"
+                )
+                
+                await self.create_alert(
+                    provider=provider,
+                    country=country,
+                    severity=severity,
+                    alert_type="HIGH_DECLINE_RATE",
+                    affected_count=declined,
+                    status_counts=status_counts
+                )
+                
+                self.active_alerts[alert_key_decline] = datetime.now()
 
     async def create_alert(
         self,
@@ -159,7 +192,8 @@ class AnomalyDetector:
         severity: str,
         alert_type: str,
         affected_count: int,
-        status_counts: dict
+        status_counts: dict,
+        error_details: dict = None
     ):
         """
         Create alert with granular analysis and LLM explanation
@@ -170,12 +204,13 @@ class AnomalyDetector:
         # Step 2: Calculate financial impact
         revenue_at_risk = await self.calculate_revenue_impact(provider, country)
 
-        # Step 3: Determine root cause
+        # Step 3: Determine root cause (include error code details)
         root_cause, suggested_action = await self.determine_root_cause(
             provider=provider,
             country=country,
             issuer_breakdown=issuer_breakdown,
-            alert_type=alert_type
+            alert_type=alert_type,
+            error_details=error_details
         )
 
         # Step 4: Call AI Agent for LLM explanation
@@ -185,7 +220,8 @@ class AnomalyDetector:
             country=country,
             error_count=affected_count,
             revenue_at_risk=float(revenue_at_risk),
-            issuer_breakdown=issuer_breakdown
+            issuer_breakdown=issuer_breakdown,
+            error_details=error_details
         )
 
         # Extract AI Agent response
@@ -215,6 +251,142 @@ class AnomalyDetector:
             f"🚨 ALERT TRIGGERED - {alert_id}: {severity} - "
             f"{provider} {country} ({affected_count} txns, ${revenue_at_risk:.2f} at risk)"
         )
+
+    def should_alert(self, provider: str, country: str, alert_type: str) -> bool:
+        """
+        Check if we should alert based on cooldown period
+        Prevents alert spam for same issue
+        """
+        alert_key = (provider, country, alert_type)
+        
+        if alert_key not in self.active_alerts:
+            return True
+        
+        last_alert = self.active_alerts[alert_key]
+        cooldown = timedelta(seconds=settings.alert_cooldown_seconds)
+        
+        return (datetime.now() - last_alert) > cooldown
+
+    async def check_error_trend(self, provider: str, country: str, current_errors: int, total: int) -> bool:
+        """
+        Check if errors are part of a persistent trend (not isolated)
+        
+        Returns True if:
+        - We have minimum consecutive errors in time window
+        - Error pattern is consistent (not random spikes)
+        """
+        if current_errors < settings.min_consecutive_errors:
+            return False
+        
+        try:
+            # Query recent error history
+            query = text("""
+                SELECT 
+                    DATE_TRUNC('minute', created_at) as minute,
+                    COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
+                    COUNT(*) as total
+                FROM events_log
+                WHERE 
+                    provider_id = :provider
+                    AND raw_payload->>'country' = :country
+                    AND created_at >= NOW() - INTERVAL ':window minutes'
+                GROUP BY minute
+                ORDER BY minute DESC
+                LIMIT 10
+            """)
+            
+            async with async_session_maker() as session:
+                result = await session.execute(query, {
+                    "provider": provider,
+                    "country": country,
+                    "window": settings.error_trend_window_minutes
+                })
+                rows = result.fetchall()
+                
+                if len(rows) < 3:  # Need at least 3 data points
+                    return False
+                
+                # Check if majority of recent windows have errors
+                windows_with_errors = sum(1 for row in rows if row[1] > 0)
+                return windows_with_errors >= (len(rows) * 0.6)  # 60% of windows
+                
+        except Exception as e:
+            logger.error(f"Error trend check failed: {e}")
+            return True  # If check fails, allow alert (fail-safe)
+
+    async def check_recovery(self, provider: str, country: str, recent_success: int) -> bool:
+        """
+        Check if system has recovered from previous error state
+        
+        Returns True if we have enough consecutive successful transactions
+        """
+        if recent_success < settings.recovery_check_threshold:
+            return False
+        
+        try:
+            # Check recent success rate
+            query = text("""
+                SELECT COUNT(*) FILTER (WHERE status = 'SUCCEEDED') as success_count
+                FROM events_log
+                WHERE 
+                    provider_id = :provider
+                    AND raw_payload->>'country' = :country
+                    AND created_at >= NOW() - INTERVAL '2 minutes'
+            """)
+            
+            async with async_session_maker() as session:
+                result = await session.execute(query, {"provider": provider, "country": country})
+                success_count = result.scalar() or 0
+                
+                return success_count >= settings.recovery_check_threshold
+                
+        except Exception as e:
+            logger.error(f"Recovery check failed: {e}")
+            return False
+
+    async def get_error_code_breakdown(self, provider: str, country: str) -> dict:
+        """
+        Get detailed breakdown of response codes (500, 501, 502, 503, 504)
+        Shows frequency of each HTTP error type
+        """
+        try:
+            query = text("""
+                SELECT 
+                    raw_payload->'provider_data'->>'response_code' as response_code,
+                    COUNT(*) as count,
+                    ARRAY_AGG(DISTINCT raw_payload->>'sub_status') as sub_statuses
+                FROM events_log
+                WHERE 
+                    provider_id = :provider
+                    AND raw_payload->>'country' = :country
+                    AND status = 'ERROR'
+                    AND created_at >= NOW() - INTERVAL '15 minutes'
+                GROUP BY response_code
+                ORDER BY count DESC
+            """)
+            
+            async with async_session_maker() as session:
+                result = await session.execute(query, {"provider": provider, "country": country})
+                rows = result.fetchall()
+                
+                response_codes = {}
+                all_sub_statuses = set()
+                
+                for row in rows:
+                    code = row[0] or "UNKNOWN"
+                    response_codes[code] = row[1]
+                    if row[2]:
+                        all_sub_statuses.update([s for s in row[2] if s])
+                
+                return {
+                    "response_codes": response_codes,
+                    "sub_statuses": list(all_sub_statuses),
+                    "most_common_code": max(response_codes.items(), key=lambda x: x[1])[0] if response_codes else None
+                }
+                
+        except Exception as e:
+            logger.error(f"Error code breakdown failed: {e}")
+            return {"response_codes": {}, "sub_statuses": []}
 
     async def get_issuer_analysis(self, provider: str, country: str) -> list:
         """
@@ -285,21 +457,33 @@ class AnomalyDetector:
         provider: str,
         country: str,
         issuer_breakdown: list,
-        alert_type: str
+        alert_type: str,
+        error_details: dict = None
     ) -> tuple[dict, dict]:
         """
         Determine root cause and suggested action
-
+        Includes HTTP response code analysis
+        
         Returns: (root_cause_dict, suggested_action_dict)
         """
+        # Extract most common error code
+        most_common_code = None
+        if error_details and error_details.get("most_common_code"):
+            most_common_code = error_details["most_common_code"]
+        
         # Check if issuer-specific
         if issuer_breakdown and len(issuer_breakdown) == 1:
             # Single issuer problem
             issuer = issuer_breakdown[0]
+            issue_desc = f"Elevated errors for {issuer['issuer_name']} cards"
+            if most_common_code:
+                issue_desc += f" (HTTP {most_common_code})"
+            
             root_cause = {
                 "provider": provider,
-                "issue": f"Elevated errors for {issuer['issuer_name']} cards",
-                "scope": f"{issuer['issuer_name']} issuers only"
+                "issue": issue_desc,
+                "scope": f"{issuer['issuer_name']} issuers only",
+                "response_code": most_common_code
             }
             suggested_action = {
                 "label": f"Failover {issuer['issuer_name']} to backup provider",
@@ -307,14 +491,31 @@ class AnomalyDetector:
             }
         else:
             # Provider-wide issue
+            issue_desc = f"{alert_type.replace('_', ' ')} across {country}"
+            if most_common_code:
+                issue_desc += f" (HTTP {most_common_code})"
+            
             root_cause = {
                 "provider": provider,
-                "issue": f"{alert_type.replace('_', ' ')} across {country}",
-                "scope": "All transactions"
+                "issue": issue_desc,
+                "scope": "All transactions",
+                "response_code": most_common_code
             }
+            
+            # Determine action based on error code
+            if most_common_code in ["504", "503", "502"]:
+                action_label = f"Increase timeout or failover {provider}"
+                action_type = "INCREASE_TIMEOUT"
+            elif most_common_code == "500":
+                action_label = f"Contact {provider} - Internal server error"
+                action_type = "CONTACT_ISSUER"
+            else:
+                action_label = f"Pause traffic to {provider}"
+                action_type = "PAUSE_TRAFFIC"
+            
             suggested_action = {
-                "label": f"Pause traffic to {provider} or increase timeout",
-                "action_type": "PAUSE_TRAFFIC"
+                "label": action_label,
+                "action_type": action_type
             }
 
         return root_cause, suggested_action
@@ -375,7 +576,8 @@ class AnomalyDetector:
         country: str,
         error_count: int,
         revenue_at_risk: float,
-        issuer_breakdown: list
+        issuer_breakdown: list,
+        error_details: dict = None
     ) -> dict | None:
         """
         Call AI Agent service for LLM reasoning
@@ -391,6 +593,14 @@ class AnomalyDetector:
             # Prepare context for AI Agent
             issuer_name = issuer_breakdown[0]["issuer_name"] if issuer_breakdown else None
             sub_statuses = issuer_breakdown[0]["sub_statuses"] if issuer_breakdown else []
+            
+            # Include error code details
+            response_codes = error_details.get("response_codes", {}) if error_details else {}
+            most_common_code = error_details.get("most_common_code") if error_details else None
+
+            # Include error code details
+            response_codes = error_details.get("response_codes", {}) if error_details else {}
+            most_common_code = error_details.get("most_common_code") if error_details else None
 
             context = {
                 "provider": provider,
@@ -399,6 +609,8 @@ class AnomalyDetector:
                 "revenue_at_risk_usd": revenue_at_risk,
                 "issuer_name": issuer_name,
                 "sub_statuses": [s for s in sub_statuses if s],
+                "response_codes": response_codes,
+                "most_common_code": most_common_code,
                 "merchant_advice_code": None,  # TODO: Extract from JSONB
                 "time_window_minutes": 15
             }
