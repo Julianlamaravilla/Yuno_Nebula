@@ -11,27 +11,26 @@ const MetricsChart = () => {
   const fetchMetrics = async () => {
     try {
       const response = await axios.get('/api/metrics/recent', {
-        params: { minutes: 20 }
+        params: { minutes: 30 }
       });
 
-      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+      // AHORA SÍ: response.data es un Array real del backend
+      if (Array.isArray(response.data) && response.data.length > 0) {
         const transformedData = response.data.map(metric => ({
           time: new Date(metric.timestamp).toLocaleTimeString('en-US', {
             hour: '2-digit',
             minute: '2-digit'
           }),
-          approvalRate: parseFloat((metric.approval_rate * 100).toFixed(2)),
-          errorRate: parseFloat((metric.error_rate * 100).toFixed(2)),
-          totalTransactions: metric.total_count || 0
+          approvalRate: parseFloat(metric.approval_rate.toFixed(2)),
+          errorRate: parseFloat(metric.error_rate.toFixed(2)),
+          totalTransactions: metric.total_count
         }));
 
         setMetricsData(transformedData);
         setError(null);
       } else {
-        // API returned empty data
-        setMetricsData([]);
+        setMetricsData([]); // Datos vacíos pero válidos
       }
-
       setLoading(false);
     } catch (err) {
       console.error('Error fetching metrics:', err);
@@ -121,10 +120,9 @@ const MetricsChart = () => {
           Approval Rate Timeline
         </h2>
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${
-            healthStatus === 'healthy' ? 'bg-green-500' :
-            healthStatus === 'degraded' ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
-          }`} />
+          <div className={`w-2 h-2 rounded-full ${healthStatus === 'healthy' ? 'bg-green-500' :
+              healthStatus === 'degraded' ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
+            }`} />
           <span className="text-xs text-gray-500 capitalize">{healthStatus}</span>
         </div>
       </div>
