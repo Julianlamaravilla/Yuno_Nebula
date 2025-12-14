@@ -108,21 +108,25 @@ async def get_alert_rules_for_context(merchant_id: str, country: str, provider: 
         SELECT
             rule_id,
             merchant_id,
+            rule_name,
             filter_country,
             filter_provider,
-            threshold_error_rate,
-            min_consecutive_errors
+            filter_issuer,
+            metric_type,
+            operator,
+            threshold_value,
+            min_transactions,
+            is_time_based,
+            start_hour,
+            end_hour,
+            severity
         FROM alert_rules
         WHERE is_active = TRUE
-          AND (
-              (merchant_id = :merchant_id AND filter_country = :country AND filter_provider = :provider)
-              OR (merchant_id = :merchant_id AND filter_country = :country AND filter_provider IS NULL)
-              OR (merchant_id = :merchant_id AND filter_country IS NULL AND filter_provider = :provider)
-              OR (merchant_id = :merchant_id AND filter_country IS NULL AND filter_provider IS NULL)
-              OR (merchant_id IS NULL)
-          )
-        ORDER BY 
-            CASE 
+          AND (merchant_id = :merchant_id OR merchant_id IS NULL)
+          AND (filter_country = :country OR filter_country IS NULL)
+          AND (filter_provider = :provider OR filter_provider IS NULL)
+        ORDER BY
+            CASE
                 WHEN merchant_id = :merchant_id AND filter_country = :country AND filter_provider = :provider THEN 5
                 WHEN merchant_id = :merchant_id AND filter_country = :country THEN 4
                 WHEN merchant_id = :merchant_id AND filter_provider = :provider THEN 3
@@ -130,7 +134,6 @@ async def get_alert_rules_for_context(merchant_id: str, country: str, provider: 
                 ELSE 1
             END DESC,
             created_at DESC
-        LIMIT 1
     """)
     
     async with async_session_maker() as session:
@@ -139,19 +142,31 @@ async def get_alert_rules_for_context(merchant_id: str, country: str, provider: 
             "country": country,
             "provider": provider
         })
-        row = result.fetchone()
-        
-        if not row:
-            return None
-        
-        return {
-            "rule_id": str(row[0]),
-            "merchant_id": row[1],
-            "filter_country": row[2],
-            "filter_provider": row[3],
-            "threshold_error_rate": float(row[4]),
-            "min_consecutive_errors": row[5]
-        }
+        rows = result.fetchall()
+
+        if not rows:
+            return []
+
+        rules = []
+        for row in rows:
+            rules.append({
+                "rule_id": str(row[0]),
+                "merchant_id": row[1],
+                "rule_name": row[2],
+                "filter_country": row[3],
+                "filter_provider": row[4],
+                "filter_issuer": row[5],
+                "metric_type": row[6],
+                "operator": row[7],
+                "threshold_value": float(row[8]),
+                "min_transactions": row[9],
+                "is_time_based": row[10],
+                "start_hour": row[11],
+                "end_hour": row[12],
+                "severity": row[13]
+            })
+
+        return rules
 
 
 async def get_merchant_rules(merchant_id: str):
@@ -183,57 +198,3 @@ async def get_merchant_rules(merchant_id: str):
         }
 
 
-async def get_alert_rules(merchant_id: str, country: str = None, provider: str = None):
-    """
-    Fetch active alert rules for a merchant with optional scope filtering
-
-    Args:
-        merchant_id: Merchant identifier
-        country: Optional country filter
-        provider: Optional provider filter
-
-    Returns:
-        List of applicable alert rules
-    """
-    query = """
-    SELECT
-        rule_id,
-        rule_name,
-        scope_country,
-        scope_provider,
-        scope_method,
-        metric_type,
-        operator,
-        threshold_value,
-        min_transactions,
-        severity
-    FROM alert_rules
-    WHERE merchant_id = :merchant_id
-      AND is_active = TRUE
-      AND (scope_country IS NULL OR scope_country = :country)
-      AND (scope_provider IS NULL OR scope_provider = :provider)
-    ORDER BY severity DESC, threshold_value ASC
-    """
-
-    result = await execute_raw_query(query, {
-        "merchant_id": merchant_id,
-        "country": country,
-        "provider": provider
-    })
-
-    rules = []
-    for row in result:
-        rules.append({
-            "rule_id": str(row[0]),
-            "rule_name": row[1],
-            "scope_country": row[2],
-            "scope_provider": row[3],
-            "scope_method": row[4],
-            "metric_type": row[5],
-            "operator": row[6],
-            "threshold_value": float(row[7]),
-            "min_transactions": row[8],
-            "severity": row[9]
-        })
-
-    return rules

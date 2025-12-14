@@ -82,9 +82,11 @@ class TransactionGenerator:
         # Determine status (with chaos injection)
         status = self._determine_status(provider, country, issuer)
 
-        # Determine sub_status based on status
+        # Determine sub_status based on status and chaos scenario
         sub_status = None
-        if status in SUB_STATUSES:
+        if self.chaos_scenario and self.chaos_scenario["type"] == "REGULATORY_BLOCK":
+            sub_status = "DO_NOT_HONOR"  # Regional/regulatory block
+        elif status in SUB_STATUSES:
             sub_status = random.choice(SUB_STATUSES[status])
 
         # Generate realistic amount
@@ -147,6 +149,16 @@ class TransactionGenerator:
                 # Target specific BIN range
                 return "DECLINED" if random.random() < 0.8 else "SUCCEEDED"
 
+            elif self.chaos_scenario["type"] == "MERCHANT_CONFIG_ERROR":
+                # Simulates invalid API keys / authentication errors (HTTP 401)
+                if provider == self.chaos_scenario.get("provider", "STRIPE"):
+                    return "ERROR"
+
+            elif self.chaos_scenario["type"] == "REGULATORY_BLOCK":
+                # Simulates regional/regulatory blocks (Code 57 - DO_NOT_HONOR)
+                if country == self.chaos_scenario.get("country", "BR"):
+                    return "DECLINED"
+
         # Normal distribution
         return random.choices(
             list(STATUS_WEIGHTS.keys()),
@@ -172,11 +184,19 @@ class TransactionGenerator:
         return random.choice(bins.get(brand, ["415231"]))
 
     def _generate_response_code(self, status: str) -> str:
-        """Generate provider response code"""
+        """Generate provider response code based on chaos scenario"""
+        # Check if chaos scenario requires specific response codes
+        if self.chaos_scenario:
+            if self.chaos_scenario["type"] == "MERCHANT_CONFIG_ERROR":
+                return "401"  # Unauthorized / Invalid API Key
+            elif self.chaos_scenario["type"] == "REGULATORY_BLOCK":
+                return "57"  # Transaction not permitted to cardholder
+
+        # Normal codes
         codes = {
             "SUCCEEDED": ["200", "0000"],
             "DECLINED": ["05", "51", "57"],
-            "ERROR": ["504", "500", "timeout"]
+            "ERROR": ["504", "500", "503", "502"]
         }
         return random.choice(codes.get(status, ["500"]))
 
@@ -185,10 +205,12 @@ class TransactionGenerator:
         Inject chaos scenario
 
         Scenarios:
-        - STRIPE_TIMEOUT: Force timeouts for Stripe MX + BBVA
+        - STRIPE_TIMEOUT: Force timeouts for Stripe MX + BBVA (HTTP 504)
         - PROVIDER_OUTAGE: 100% error rate for specific provider
-        - ISSUER_DOWN: Target specific issuer
+        - ISSUER_DOWN: Target specific issuer with declines
         - BIN_ATTACK: Fraud pattern on specific BIN
+        - MERCHANT_CONFIG_ERROR: Invalid API Key errors (HTTP 401)
+        - REGULATORY_BLOCK: Regional/regulatory blocks (Code 57, DO_NOT_HONOR)
         """
         logger.warning(f"🔥 CHAOS INJECTED: {scenario}")
         self.chaos_scenario = {"type": scenario, **kwargs}
@@ -249,7 +271,9 @@ def main():
                 scenarios = [
                     ("STRIPE_TIMEOUT", {}),
                     ("PROVIDER_OUTAGE", {"provider": random.choice(PROVIDERS)}),
-                    ("ISSUER_DOWN", {"issuer": "BBVA"})
+                    ("ISSUER_DOWN", {"issuer": "BBVA"}),
+                    ("MERCHANT_CONFIG_ERROR", {"provider": random.choice(PROVIDERS)}),
+                    ("REGULATORY_BLOCK", {"country": random.choice(COUNTRIES)})
                 ]
                 scenario, kwargs = random.choice(scenarios)
                 generator.inject_chaos(scenario, **kwargs)

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     ai_agent_url: str = "http://ai-agent:8001"
 
     # Redis Key Patterns
-    redis_stats_key_pattern: str = "stats:{country}:{provider}:{status}:{minute}"
+    redis_stats_key_pattern: str = "stats:{merchant_id}:{country}:{provider}:{status}:{minute}"
     redis_key_ttl_seconds: int = 3600  # 1 hour
 
     # Time Windows

@@ -153,6 +153,85 @@ class AlertCreate(BaseModel):
 
 
 # ============================================
+# ALERT RULES: CRUD Schemas
+# ============================================
+
+class AlertRuleCreate(BaseModel):
+    """Schema for creating alert rules"""
+    merchant_id: Optional[str] = Field(None, description="Merchant ID (NULL = global rule)")
+    rule_name: str = Field(..., max_length=255, description="Human-readable rule name")
+
+    # Filters (NULL = applies to all)
+    filter_country: Optional[str] = Field(None, min_length=2, max_length=2, description="ISO country code filter")
+    filter_provider: Optional[str] = Field(None, max_length=50, description="Provider filter (STRIPE, DLOCAL, etc.)")
+    filter_issuer: Optional[str] = Field(None, max_length=100, description="Issuer filter (BBVA, Santander, etc.)")
+
+    # Metric configuration
+    metric_type: Literal["APPROVAL_RATE", "ERROR_RATE", "DECLINE_RATE", "TOTAL_VOLUME"] = Field(
+        ...,
+        description="Type of metric to monitor"
+    )
+    operator: Literal["<", ">", "<=", ">="] = Field(..., description="Comparison operator")
+    threshold_value: Decimal = Field(..., ge=0, description="Threshold value for triggering alert")
+    min_transactions: int = Field(10, ge=1, description="Minimum sample size before evaluation")
+
+    # Time-based rules
+    is_time_based: bool = Field(False, description="Whether rule is time-constrained")
+    start_hour: Optional[int] = Field(None, ge=0, lt=24, description="Start hour (0-23) for time-based rules")
+    end_hour: Optional[int] = Field(None, ge=0, lt=24, description="End hour (0-23) for time-based rules")
+
+    # Alert action
+    severity: Literal["CRITICAL", "WARNING"] = Field("WARNING", description="Alert severity level")
+
+    @field_validator('start_hour', 'end_hour')
+    @classmethod
+    def validate_time_hours(cls, v, info):
+        """Validate that time hours are provided if is_time_based is True"""
+        if info.data.get('is_time_based') and v is None:
+            raise ValueError(f"{info.field_name} is required when is_time_based is True")
+        return v
+
+    class Config:
+        from_attributes = True
+
+
+class AlertRuleResponse(BaseModel):
+    """Schema for alert rule responses"""
+    rule_id: UUID = Field(..., description="Unique rule identifier")
+    merchant_id: Optional[str]
+    rule_name: str
+
+    # Filters
+    filter_country: Optional[str]
+    filter_provider: Optional[str]
+    filter_issuer: Optional[str]
+
+    # Metric configuration
+    metric_type: str
+    operator: str
+    threshold_value: Decimal
+    min_transactions: int
+
+    # Time-based rules
+    is_time_based: bool
+    start_hour: Optional[int]
+    end_hour: Optional[int]
+
+    # Alert action
+    severity: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Type aliases for frontend convenience
+RuleCreate = AlertRuleCreate
+RuleResponse = AlertRuleResponse
+
+
+# ============================================
 # UTILITY: Currency Conversion
 # ============================================
 

@@ -67,20 +67,31 @@ CREATE TABLE merchant_rules (
 
 -- ============================================
 -- TABLE: alert_rules
--- Custom alert thresholds per merchant/provider/country
+-- Dynamic alert rules with scope-based thresholds
 -- ============================================
 CREATE TABLE alert_rules (
     rule_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     merchant_id VARCHAR(100),  -- NULL = global rule
-    
+    rule_name VARCHAR(255),
+
     -- Filters (NULL = applies to all)
     filter_country CHAR(2),
     filter_provider VARCHAR(50),
-    
-    -- Thresholds (simplified)
-    threshold_error_rate DECIMAL(4,3) NOT NULL DEFAULT 0.10,
-    min_consecutive_errors INTEGER NOT NULL DEFAULT 8,
-    
+    filter_issuer VARCHAR(100),  -- For issuer-specific rules (e.g., "BBVA")
+
+    -- Metric configuration
+    metric_type VARCHAR(50) NOT NULL,  -- 'APPROVAL_RATE', 'ERROR_RATE', 'DECLINE_RATE', 'TOTAL_VOLUME'
+    operator VARCHAR(10) NOT NULL,     -- '<', '>', '>=', '<='
+    threshold_value DECIMAL(5,2) NOT NULL,
+    min_transactions INT DEFAULT 10,   -- Minimum sample size
+
+    -- Time-based rules (for peak hours, business hours, etc.)
+    is_time_based BOOLEAN NOT NULL DEFAULT FALSE,
+    start_hour INTEGER CHECK (start_hour >= 0 AND start_hour < 24),
+    end_hour INTEGER CHECK (end_hour >= 0 AND end_hour < 24),
+
+    -- Alert action
+    severity VARCHAR(20) DEFAULT 'WARNING' CHECK (severity IN ('CRITICAL', 'WARNING')),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -98,16 +109,28 @@ INSERT INTO merchant_rules (merchant_id, sla_minutes, avg_approval_rate) VALUES
     ('merchant_techstore', 3, 0.68),
     ('merchant_fashionhub', 5, 0.75);
 
--- SEED DATA: Default alert rules
-INSERT INTO alert_rules (merchant_id, filter_country, filter_provider, threshold_error_rate, min_consecutive_errors) VALUES
-    -- Global default
-    (NULL, NULL, NULL, 0.10, 8),
-    -- Shopito MX is more sensitive
-    ('merchant_shopito', 'MX', NULL, 0.05, 5),
-    -- TechStore Stripe BR is critical
-    ('merchant_techstore', 'BR', 'STRIPE', 0.03, 3),
-    -- FashionHub is less sensitive (high volume)
-    ('merchant_fashionhub', NULL, NULL, 0.20, 15);
+-- Limpiar reglas viejas
+TRUNCATE alert_rules;
+
+-- ESCENARIO 1: "Hora Pico" (Alta Exigencia)
+-- "Si son entre las 9 AM y 6 PM, exijo 95% de aprobación. Si baja, ALERTA CRÍTICA."
+INSERT INTO alert_rules (merchant_id, rule_name, is_time_based, start_hour, end_hour, metric_type, operator, threshold_value, severity)
+VALUES ('merchant_shopito', 'SLA Hora Pico (Strict)', TRUE, 9, 18, 'APPROVAL_RATE', '<', 0.95, 'CRITICAL');
+
+-- ESCENARIO 2: "Hora Valle" (Baja Exigencia)
+-- "Si son las 3 AM (00-05), relájate. Solo avisa si la aprobación cae al 50%."
+INSERT INTO alert_rules (merchant_id, rule_name, is_time_based, start_hour, end_hour, metric_type, operator, threshold_value, severity)
+VALUES ('merchant_shopito', 'Monitoreo Hora Valle', TRUE, 0, 5, 'APPROVAL_RATE', '<', 0.50, 'WARNING');
+
+-- ESCENARIO 3: "Transacciones Aprobadas por Merchant"
+-- "Para Shopito en Colombia, avisa si hay CERO transacciones (Caída Total)."
+INSERT INTO alert_rules (merchant_id, rule_name, filter_country, metric_type, operator, threshold_value, severity)
+VALUES ('merchant_shopito', 'Blackout Colombia', 'CO', 'TOTAL_VOLUME', '<', 1, 'CRITICAL');
+
+-- ESCENARIO 5: "Granularidad (Issuer/Cuenta)"
+-- "Si falla BBVA específicamente en Stripe, avisa rápido (5% error)."
+INSERT INTO alert_rules (merchant_id, rule_name, filter_provider, filter_issuer, metric_type, operator, threshold_value, severity)
+VALUES ('merchant_shopito', 'Fallo Específico BBVA', 'STRIPE', 'BBVA', 'ERROR_RATE', '>', 0.05, 'WARNING');
 
 -- ============================================
 -- HELPER FUNCTIONS

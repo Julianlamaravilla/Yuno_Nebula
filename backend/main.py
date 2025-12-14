@@ -12,7 +12,7 @@ import logging
 import json
 from typing import Dict, List
 
-from schemas import PaymentEvent, convert_to_usd
+from schemas import PaymentEvent, convert_to_usd, AlertRuleCreate, AlertRuleResponse
 from database import get_db, check_db_connection
 from config import settings
 
@@ -161,8 +161,8 @@ async def update_redis_metrics(payment: PaymentEvent):
     """
     Update Redis sliding window counters
 
-    Key Pattern: stats:{country}:{provider}:{status}:{minute_window}
-    Example: stats:MX:STRIPE:ERROR:202412131430
+    Key Pattern: stats:{merchant_id}:{country}:{provider}:{status}:{minute_window}
+    Example: stats:merchant_shopito:MX:STRIPE:ERROR:202412131430
 
     Uses Redis pipeline for atomic multi-key updates
     """
@@ -171,8 +171,8 @@ async def update_redis_metrics(payment: PaymentEvent):
         timestamp = payment.created_at
         minute_window = timestamp.strftime("%Y%m%d%H%M")
 
-        # Build Redis key
-        redis_key = f"stats:{payment.country}:{payment.provider_data.id}:{payment.status}:{minute_window}"
+        # Build Redis key with merchant_id
+        redis_key = f"stats:{payment.merchant_id}:{payment.country}:{payment.provider_data.id}:{payment.status}:{minute_window}"
 
         # Use pipeline for atomic operations
         async with redis_client.pipeline() as pipe:
@@ -319,6 +319,248 @@ async def get_alerts(limit: int = 10, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to fetch alerts")
 
 
+@app.post("/rules", status_code=status.HTTP_201_CREATED)
+async def create_alert_rule(
+    rule: AlertRuleCreate,
+    db: AsyncSession = Depends(get_db)
+) -> AlertRuleResponse:
+    """
+    Create new alert rule
+
+    Parameters:
+        rule: Alert rule configuration
+
+    Returns:
+        Created alert rule with rule_id
+    """
+    try:
+        query = text("""
+            INSERT INTO alert_rules (
+                merchant_id,
+                rule_name,
+                filter_country,
+                filter_provider,
+                filter_issuer,
+                metric_type,
+                operator,
+                threshold_value,
+                min_transactions,
+                is_time_based,
+                start_hour,
+                end_hour,
+                severity
+            ) VALUES (
+                :merchant_id,
+                :rule_name,
+                :filter_country,
+                :filter_provider,
+                :filter_issuer,
+                :metric_type,
+                :operator,
+                :threshold_value,
+                :min_transactions,
+                :is_time_based,
+                :start_hour,
+                :end_hour,
+                :severity
+            )
+            RETURNING
+                rule_id,
+                merchant_id,
+                rule_name,
+                filter_country,
+                filter_provider,
+                filter_issuer,
+                metric_type,
+                operator,
+                threshold_value,
+                min_transactions,
+                is_time_based,
+                start_hour,
+                end_hour,
+                severity,
+                is_active,
+                created_at
+        """)
+
+        result = await db.execute(query, {
+            "merchant_id": rule.merchant_id,
+            "rule_name": rule.rule_name,
+            "filter_country": rule.filter_country,
+            "filter_provider": rule.filter_provider,
+            "filter_issuer": rule.filter_issuer,
+            "metric_type": rule.metric_type,
+            "operator": rule.operator,
+            "threshold_value": float(rule.threshold_value),
+            "min_transactions": rule.min_transactions,
+            "is_time_based": rule.is_time_based,
+            "start_hour": rule.start_hour,
+            "end_hour": rule.end_hour,
+            "severity": rule.severity
+        })
+        await db.commit()
+
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=500, detail="Failed to create rule")
+
+        return AlertRuleResponse(
+            rule_id=row[0],
+            merchant_id=row[1],
+            rule_name=row[2],
+            filter_country=row[3],
+            filter_provider=row[4],
+            filter_issuer=row[5],
+            metric_type=row[6],
+            operator=row[7],
+            threshold_value=row[8],
+            min_transactions=row[9],
+            is_time_based=row[10],
+            start_hour=row[11],
+            end_hour=row[12],
+            severity=row[13],
+            is_active=row[14],
+            created_at=row[15]
+        )
+
+    except Exception as e:
+        logger.error(f"Alert rule creation failed: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create alert rule: {str(e)}")
+
+
+@app.get("/rules")
+async def get_alert_rules(
+    merchant_id: str | None = None,
+    is_active: bool | None = True,
+    db: AsyncSession = Depends(get_db)
+) -> List[AlertRuleResponse]:
+    """
+    Get alert rules with optional filters
+
+    Query Parameters:
+        merchant_id: Filter by merchant ID (optional)
+        is_active: Filter by active status (default: True, set to None for all)
+
+    Returns:
+        List of alert rules
+    """
+    try:
+        # Build dynamic query
+        where_clauses = []
+        params = {}
+
+        if merchant_id is not None:
+            where_clauses.append("merchant_id = :merchant_id")
+            params["merchant_id"] = merchant_id
+
+        if is_active is not None:
+            where_clauses.append("is_active = :is_active")
+            params["is_active"] = is_active
+
+        where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+        query = text(f"""
+            SELECT
+                rule_id,
+                merchant_id,
+                rule_name,
+                filter_country,
+                filter_provider,
+                filter_issuer,
+                metric_type,
+                operator,
+                threshold_value,
+                min_transactions,
+                is_time_based,
+                start_hour,
+                end_hour,
+                severity,
+                is_active,
+                created_at
+            FROM alert_rules
+            {where_sql}
+            ORDER BY created_at DESC
+        """)
+
+        result = await db.execute(query, params)
+        rows = result.fetchall()
+
+        rules = []
+        for row in rows:
+            rules.append(AlertRuleResponse(
+                rule_id=row[0],
+                merchant_id=row[1],
+                rule_name=row[2],
+                filter_country=row[3],
+                filter_provider=row[4],
+                filter_issuer=row[5],
+                metric_type=row[6],
+                operator=row[7],
+                threshold_value=row[8],
+                min_transactions=row[9],
+                is_time_based=row[10],
+                start_hour=row[11],
+                end_hour=row[12],
+                severity=row[13],
+                is_active=row[14],
+                created_at=row[15]
+            ))
+
+        return rules
+
+    except Exception as e:
+        logger.error(f"Alert rules query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch alert rules: {str(e)}")
+
+
+@app.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_alert_rule(
+    rule_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Delete alert rule by ID (soft delete - sets is_active to False)
+
+    Path Parameters:
+        rule_id: UUID of the rule to delete
+
+    Returns:
+        204 No Content on success
+    """
+    try:
+        # Validate UUID format
+        from uuid import UUID
+        try:
+            UUID(rule_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid rule_id format (must be UUID)")
+
+        # Soft delete by setting is_active to False
+        query = text("""
+            UPDATE alert_rules
+            SET is_active = FALSE
+            WHERE rule_id = :rule_id
+            RETURNING rule_id
+        """)
+
+        result = await db.execute(query, {"rule_id": rule_id})
+        await db.commit()
+
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Alert rule not found")
+
+        logger.info(f"Alert rule {rule_id} deactivated successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Alert rule deletion failed: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete alert rule: {str(e)}")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -329,7 +571,13 @@ async def root():
         "endpoints": {
             "health": "/health",
             "ingest": "POST /ingest",
-            "metrics": "/metrics/recent?minutes=5"
+            "metrics": "/metrics/recent?minutes=5",
+            "alerts": "GET /alerts",
+            "rules": {
+                "create": "POST /rules",
+                "list": "GET /rules?merchant_id=xxx&is_active=true",
+                "delete": "DELETE /rules/{rule_id}"
+            }
         }
     }
 

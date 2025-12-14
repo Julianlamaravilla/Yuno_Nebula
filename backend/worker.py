@@ -85,6 +85,7 @@ class AnomalyDetector:
         logger.debug("Running anomaly detection cycle...")
 
         # Step 1: Fetch all Redis metric keys
+        # New format: stats:{merchant_id}:{country}:{provider}:{status}:{minute_window}
         pattern = "stats:*"
         metrics = defaultdict(lambda: defaultdict(int))
 
@@ -92,112 +93,121 @@ class AnomalyDetector:
             count = await self.redis_client.get(key)
             parts = key.split(":")
 
-            if len(parts) == 5:
-                _, country, provider, status, minute_window = parts
-                metric_key = (country, provider)
+            if len(parts) == 6:
+                _, merchant_id, country, provider, status, minute_window = parts
+                metric_key = (merchant_id, country, provider)
                 metrics[metric_key][status] += int(count or 0)
 
-        # Step 2: Analyze each provider/country combination
-        for (country, provider), status_counts in metrics.items():
-            await self.analyze_provider(country, provider, status_counts)
+        # Step 2: Analyze each merchant/provider/country combination
+        for (merchant_id, country, provider), status_counts in metrics.items():
+            await self.analyze_provider(merchant_id, country, provider, status_counts)
 
-    async def analyze_provider(self, country: str, provider: str, status_counts: dict):
+    async def analyze_provider(self, merchant_id: str, country: str, provider: str, status_counts: dict):
         """
-        Analyze metrics with custom alert_rules per merchant
+        RULE-BASED DETECTION SYSTEM
+
+        Evaluates all applicable alert_rules for the merchant/provider/country context.
+        Supports: APPROVAL_RATE, ERROR_RATE, DECLINE_RATE, TOTAL_VOLUME metrics
+        Time-based rules (peak hours, business hours)
         """
-        # Get merchant_id from recent transactions
-        merchant_id = await self.get_merchant_from_context(provider, country)
-        
-        # Load custom alert rule
-        alert_rule = await get_alert_rules_for_context(merchant_id, country, provider)
-        
-        if not alert_rule:
-            logger.warning(f"No rule for {merchant_id}/{country}/{provider}, using defaults")
-            error_threshold = self.error_threshold
-            min_consecutive_errors = settings.min_consecutive_errors
-        else:
-            error_threshold = alert_rule["threshold_error_rate"]
-            min_consecutive_errors = alert_rule["min_consecutive_errors"]
-            logger.debug(f"Using rule for {merchant_id}/{country}/{provider} (threshold={error_threshold:.1%})")
-        
+        # Load ALL applicable rules for this context
+        rules = await get_alert_rules_for_context(merchant_id, country, provider)
+
+        # Calculate metrics
         total = sum(status_counts.values())
-        if total < settings.min_transactions_for_alert:
-            return
-
         succeeded = status_counts.get("SUCCEEDED", 0)
         declined = status_counts.get("DECLINED", 0)
         errors = status_counts.get("ERROR", 0)
 
         # Calculate rates
         error_rate = errors / total if total > 0 else 0
+        approval_rate = succeeded / total if total > 0 else 0
         decline_rate = declined / (succeeded + declined) if (succeeded + declined) > 0 else 0
 
-        # Check if error trend is persistent (anti-false positive)
-        is_persistent_error = await self.check_error_trend(
-            provider, country, errors, total, min_consecutive_errors
-        )
-        
-        # Check for recovery (if previously alerted, verify issue persists)
-        is_recovered = await self.check_recovery(provider, country, succeeded)
-        alert_key = (provider, country, "HIGH_ERROR_RATE")
-        
-        if is_recovered and alert_key in self.active_alerts:
-            logger.info(f"✅ RECOVERY: {provider} in {country} has recovered")
-            del self.active_alerts[alert_key]
-            return
+        current_hour = datetime.now().hour
 
-        # Red Alert: High error rate WITH persistent trend
-        if error_rate > error_threshold and is_persistent_error:
-            # Check if already alerted recently
-            if self.should_alert(provider, country, "HIGH_ERROR_RATE"):
-                # Get detailed error breakdown (response codes)
-                error_details = await self.get_error_code_breakdown(provider, country)
-                
-                severity = "CRITICAL" if error_rate > 0.30 else "WARNING"
-                
-                logger.warning(
-                    f"🚨 PERSISTENT ERROR: {provider} in {country} "
-                    f"({error_rate:.1%}, {errors}/{total} txns) - {severity}"
-                    f"\n   Merchant: {merchant_id}, Threshold: {error_threshold:.1%}"
-                    f"\n   Response codes: {error_details.get('response_codes', {})}"
-                )
-                
-                await self.create_alert(
-                    provider=provider,
-                    country=country,
-                    merchant_id=merchant_id,
-                    severity=severity,
-                    alert_type="HIGH_ERROR_RATE",
-                    affected_count=errors,
-                    status_counts=status_counts,
-                    error_details=error_details
-                )
-                
-                self.active_alerts[alert_key] = datetime.now()
+        # === EVALUATE EACH RULE ===
+        for rule in rules:
+            # === TIME-BASED VALIDATION ===
+            if rule.get("is_time_based"):
+                start_hour = rule.get("start_hour")
+                end_hour = rule.get("end_hour")
 
-        # Yellow Alert: Elevated decline rate (simplified - use default 50%)
-        elif decline_rate > self.decline_threshold:
-            alert_key_decline = (provider, country, "HIGH_DECLINE_RATE")
-            
-            if self.should_alert(provider, country, "HIGH_DECLINE_RATE"):
-                severity = "WARNING"
-                
-                logger.warning(
-                    f"⚠️  HIGH DECLINE RATE: {provider} in {country} "
-                    f"({decline_rate:.1%}, {declined} declined) - {severity}"
-                )
-                
-                await self.create_alert(
-                    provider=provider,
-                    country=country,
-                    merchant_id=merchant_id,
-                    severity=severity,
-                    alert_type="HIGH_DECLINE_RATE",
-                    affected_count=declined,
-                    status_counts=status_counts
-                )
-                
-                self.active_alerts[alert_key_decline] = datetime.now()
+                if start_hour is not None and end_hour is not None:
+                    if not (start_hour <= current_hour < end_hour):
+                        logger.debug(
+                            f"⏰ Rule '{rule.get('rule_name')}' INACTIVE "
+                            f"(current={current_hour}h, active={start_hour}-{end_hour}h)"
+                        )
+                        continue  # Skip this rule
+
+            # === LAYER 1: MIN TRANSACTIONS FILTER ===
+            min_txns = rule.get("min_transactions", 10)
+            if total < min_txns:
+                logger.debug(f"Rule '{rule.get('rule_name')}': volume too low ({total} < {min_txns})")
+                continue
+
+            # === EVALUATE METRIC ===
+            metric_type = rule.get("metric_type")
+            operator = rule.get("operator")
+            threshold = rule.get("threshold_value")
+
+            # Get current metric value
+            if metric_type == "APPROVAL_RATE":
+                current_value = approval_rate
+            elif metric_type == "ERROR_RATE":
+                current_value = error_rate
+            elif metric_type == "DECLINE_RATE":
+                current_value = decline_rate
+            elif metric_type == "TOTAL_VOLUME":
+                current_value = total
+            else:
+                logger.warning(f"Unknown metric_type: {metric_type}")
+                continue
+
+            # Apply operator
+            condition_met = False
+            if operator == "<":
+                condition_met = current_value < threshold
+            elif operator == ">":
+                condition_met = current_value > threshold
+            elif operator == "<=":
+                condition_met = current_value <= threshold
+            elif operator == ">=":
+                condition_met = current_value >= threshold
+            else:
+                logger.warning(f"Unknown operator: {operator}")
+                continue
+
+            # === TRIGGER ALERT IF CONDITION MET ===
+            if condition_met:
+                rule_key = (provider, country, rule.get("rule_id"))
+
+                if self.should_alert(provider, country, rule.get("rule_id")):
+                    logger.warning(
+                        f"🚨 RULE TRIGGERED: {rule.get('rule_name')} "
+                        f"| {metric_type} {operator} {threshold} "
+                        f"| Current: {current_value:.2f} "
+                        f"| Severity: {rule.get('severity')}"
+                    )
+
+                    # Get error details if applicable
+                    error_details = None
+                    if metric_type in ["ERROR_RATE", "DECLINE_RATE"]:
+                        error_details = await self.get_error_code_breakdown(provider, country)
+
+                    await self.create_alert(
+                        provider=provider,
+                        country=country,
+                        merchant_id=merchant_id,
+                        severity=rule.get("severity", "WARNING"),
+                        alert_type=rule.get("rule_name", metric_type),
+                        affected_count=errors if metric_type == "ERROR_RATE" else declined,
+                        status_counts=status_counts,
+                        error_details=error_details or {"metric": metric_type, "value": current_value}
+                    )
+
+                    self.active_alerts[rule_key] = datetime.now()
 
     async def create_alert(
         self,
@@ -251,9 +261,15 @@ class AnomalyDetector:
             }
 
         # Step 5: Insert alert into database
+        # Custom title for probabilistic anomalies
+        if alert_type == "PROBABILISTIC_ANOMALY":
+            title = f"{provider} {country} - Anomalía de Comportamiento (Probabilística)"
+        else:
+            title = f"{provider} {country} - {alert_type.replace('_', ' ').title()}"
+
         alert_id = await self.save_alert(
             severity=severity,
-            title=f"{provider} {country} - {alert_type.replace('_', ' ').title()}",
+            title=title,
             confidence_score=confidence_score,
             revenue_at_risk_usd=revenue_at_risk,
             affected_transactions=affected_count,
@@ -312,54 +328,72 @@ class AnomalyDetector:
         
         return (datetime.now() - last_alert) > cooldown
 
-    async def check_error_trend(self, provider: str, country: str, current_errors: int, total: int, min_consecutive: int = None) -> bool:
+    async def check_error_trend(self, provider: str, country: str, error_rate: float, threshold: float) -> bool:
         """
-        Check if errors are part of a persistent trend (not isolated)
-        
-        Returns True if:
-        - We have minimum consecutive errors in time window
-        - Error pattern is consistent (not random spikes)
+        LAYER 2: Trend Detection with Redis Counters
+
+        Tracks consecutive cycles with high error rates.
+        Only triggers alert after 3 consecutive cycles (30 seconds) of errors.
+        Resets counter if error rate drops below threshold.
+
+        Returns:
+            True if error trend is persistent (3+ consecutive cycles)
+            False otherwise
         """
-        min_consecutive = min_consecutive or settings.min_consecutive_errors
-        
-        if current_errors < min_consecutive:
-            return False
-        
+        trend_key = f"trend:{country}:{provider}:error_streak"
+
         try:
-            # Query recent error history
-            query = text("""
-                SELECT
-                    DATE_TRUNC('minute', created_at) as minute,
-                    COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
-                    COUNT(*) as total
-                FROM events_log
-                WHERE
-                    provider_id = :provider
-                    AND raw_payload->>'country' = :country
-                    AND created_at >= NOW() - make_interval(mins => :window)
-                GROUP BY minute
-                ORDER BY minute DESC
-                LIMIT 10
-            """)
-            
-            async with async_session_maker() as session:
-                result = await session.execute(query, {
-                    "provider": provider,
-                    "country": country,
-                    "window": settings.error_trend_window_minutes
-                })
-                rows = result.fetchall()
-                
-                if len(rows) < 3:  # Need at least 3 data points
+            if error_rate > threshold:
+                # Increment streak counter
+                streak = await self.redis_client.incr(trend_key)
+                await self.redis_client.expire(trend_key, 60)  # Expire after 1 minute
+
+                logger.debug(f"Error streak for {provider} in {country}: {streak} cycles")
+
+                # Require 3 consecutive cycles (30 seconds) before alerting
+                if streak >= 3:
+                    logger.info(f"🔥 PERSISTENT TREND DETECTED: {provider} in {country} (streak={streak})")
+                    return True
+                else:
+                    logger.debug(f"Error trend building: {streak}/3 cycles")
                     return False
-                
-                # Check if majority of recent windows have errors
-                windows_with_errors = sum(1 for row in rows if row[1] > 0)
-                return windows_with_errors >= (len(rows) * 0.6)  # 60% of windows
-                
+            else:
+                # Error rate is normal, reset streak
+                await self.redis_client.delete(trend_key)
+                return False
+
         except Exception as e:
             logger.error(f"Error trend check failed: {e}")
-            return True  # If check fails, allow alert (fail-safe)
+            # Fail-safe: allow alert if Redis fails
+            return error_rate > threshold
+
+    async def check_probabilistic_anomaly(self, approval_rate: float) -> tuple[bool, float]:
+        """
+        LAYER 3: Probabilistic Model (Z-Score Detection)
+
+        Uses statistical deviation to detect anomalies when no custom rule exists.
+        Baseline: 85% approval rate
+        Std Deviation: 5%
+
+        Returns:
+            (is_anomaly, z_score)
+        """
+        BASELINE = 0.85  # Theoretical baseline (85% approval)
+        STD_DEV = 0.05   # Standard deviation (5%)
+
+        # Calculate Z-Score: (Baseline - Current) / StdDev
+        z_score = (BASELINE - approval_rate) / STD_DEV
+
+        # Z-Score > 3 means extreme deviation (approval_rate < 70%)
+        is_anomaly = z_score > 3
+
+        if is_anomaly:
+            logger.info(
+                f"📊 PROBABILISTIC ANOMALY DETECTED: "
+                f"Z-Score={z_score:.2f}, Approval Rate={approval_rate:.1%} (Baseline={BASELINE:.1%})"
+            )
+
+        return is_anomaly, z_score
 
     async def check_recovery(self, provider: str, country: str, recent_success: int) -> bool:
         """
