@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
 
     # Alert Thresholds
-    alert_threshold_error_rate: float = 0.15  # 15%
-    alert_threshold_decline_rate: float = 0.20  # 20% above baseline
+    alert_threshold_error_rate: float = 0.20  # 20%
+    alert_threshold_decline_rate: float = 0.50  # 50% decline rate
+    min_transactions_for_alert: int = 50  # Minimum sample size
+    alert_cooldown_seconds: int = 600  # 10 minutes between duplicate alerts
 
     # Worker Configuration
     check_interval_seconds: int = 10

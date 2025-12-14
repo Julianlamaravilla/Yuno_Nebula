@@ -40,8 +40,8 @@ class AnomalyDetector:
     def __init__(self):
         self.redis_client: redis.Redis | None = None
         self.check_interval = settings.check_interval_seconds
-        self.error_threshold = 0.01
-        self.decline_threshold = 0.05 
+        self.error_threshold = 0.20
+        self.decline_threshold = 0.50 
 
     async def start(self):
         """Initialize and start the detection loop"""
@@ -119,7 +119,7 @@ class AnomalyDetector:
         error_rate = errors / total if total > 0 else 0
         decline_rate = declined / (succeeded + declined) if (succeeded + declined) > 0 else 0
 
-        severity = "CRITICAL" if random.random() < 0.10 else "WARNING"
+        severity = "CRITICAL" if error_rate > 0.30 or decline_rate > 0.60 else "WARNING"
 
         # Red Alert: High error rate
         if error_rate > self.error_threshold:
@@ -138,7 +138,7 @@ class AnomalyDetector:
 
         # Yellow Alert: Elevated decline rate
         # TODO: Fetch merchant baseline and compare
-        elif decline_rate > 0.30:  # Simplified threshold
+        elif decline_rate > self.decline_threshold:  # Simplified threshold
             logger.warning(
                 f"⚠️  HIGH DECLINE RATE: {provider} in {country} "
                 f"({decline_rate:.1%}) - {severity}"
