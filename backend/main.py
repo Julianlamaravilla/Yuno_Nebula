@@ -11,7 +11,7 @@ import redis.asyncio as redis
 import logging
 import json
 from typing import Dict, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from schemas import PaymentEvent, convert_to_usd, AlertRuleCreate, AlertRuleResponse
 from database import get_db, check_db_connection
@@ -447,6 +447,129 @@ async def delete_alert_rule(rule_id: str, db: AsyncSession = Depends(get_db)):
         logger.error(f"Alert rule deletion failed: {e}")
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# KAM MANAGEMENT - PYDANTIC MODELS
+# ============================================
+
+class KamCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: str = Field(..., pattern=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+
+class KamResponse(BaseModel):
+    kam_id: str
+    name: str
+    email: str
+    created_at: str
+
+class MerchantAssign(BaseModel):
+    merchant_id: str = Field(..., min_length=1, max_length=100)
+    kam_id: str
+
+
+# ============================================
+# KAM MANAGEMENT - ENDPOINTS
+# ============================================
+
+@app.get("/kams")
+async def get_kams(db: AsyncSession = Depends(get_db)):
+    """Get all registered KAMs"""
+    try:
+        query = text("""
+            SELECT kam_id, name, email, created_at
+            FROM kams
+            ORDER BY name ASC
+        """)
+        result = await db.execute(query)
+        rows = result.fetchall()
+
+        kams = []
+        for row in rows:
+            kams.append({
+                "kam_id": str(row[0]),
+                "name": row[1],
+                "email": row[2],
+                "created_at": row[3].isoformat() if row[3] else None
+            })
+
+        return kams
+
+    except Exception as e:
+        logger.error(f"KAMs query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch KAMs: {str(e)}")
+
+
+@app.post("/kams", status_code=status.HTTP_201_CREATED)
+async def create_kam(kam: KamCreate, db: AsyncSession = Depends(get_db)) -> KamResponse:
+    """Register a new KAM"""
+    try:
+        query = text("""
+            INSERT INTO kams (name, email)
+            VALUES (:name, :email)
+            RETURNING kam_id, name, email, created_at
+        """)
+
+        result = await db.execute(query, {
+            "name": kam.name,
+            "email": kam.email
+        })
+        await db.commit()
+        row = result.fetchone()
+
+        return KamResponse(
+            kam_id=str(row[0]),
+            name=row[1],
+            email=row[2],
+            created_at=row[3].isoformat()
+        )
+
+    except Exception as e:
+        logger.error(f"KAM creation failed: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create KAM: {str(e)}"
+        )
+
+
+@app.post("/merchants/assign")
+async def assign_merchant_to_kam(assignment: MerchantAssign, db: AsyncSession = Depends(get_db)):
+    """Assign a merchant to a KAM (updates merchant_rules table)"""
+    try:
+        query = text("""
+            UPDATE merchant_rules
+            SET kam_id = :kam_id
+            WHERE merchant_id = :merchant_id
+            RETURNING merchant_id
+        """)
+
+        result = await db.execute(query, {
+            "kam_id": assignment.kam_id,
+            "merchant_id": assignment.merchant_id
+        })
+        await db.commit()
+
+        if not result.fetchone():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Merchant '{assignment.merchant_id}' not found in merchant_rules"
+            )
+
+        return {
+            "status": "success",
+            "message": f"Merchant {assignment.merchant_id} assigned to KAM successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Merchant assignment failed: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to assign merchant: {str(e)}"
+        )
 
 
 @app.get("/")

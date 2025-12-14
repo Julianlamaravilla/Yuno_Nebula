@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw, Settings } from 'lucide-react';
+import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw, Settings, Users } from 'lucide-react';
 import AlertCard from './components/AlertCard';
 import MetricsChart from './components/MetricsChart';
 import RuleSettings from './components/RuleSettings';
+import KamManager from './components/KamManager';
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -11,6 +12,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [showSettings, setShowSettings] = useState(false);
+  const [showKamManager, setShowKamManager] = useState(false);
 
   const fetchAlerts = async () => {
     try {
@@ -72,6 +74,13 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-4">
+              <button
+                onClick={() => setShowKamManager(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors border border-blue-200"
+              >
+                <Users size={16} />
+                <span className="text-sm font-medium">KAM Management</span>
+              </button>
               <button
                 onClick={() => setShowSettings(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors border border-blue-200"
@@ -229,6 +238,9 @@ function App() {
 
       {/* Settings Modal */}
       <RuleSettings isOpen={showSettings} onClose={() => setShowSettings(false)} />
+
+      {/* KAM Management Modal */}
+      <KamManager isOpen={showKamManager} onClose={() => setShowKamManager(false)} />
     </div>
   );
 }
