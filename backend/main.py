@@ -10,7 +10,7 @@ from datetime import datetime
 import redis.asyncio as redis
 import logging
 import json
-from typing import Dict
+from typing import Dict, List
 
 from schemas import PaymentEvent, convert_to_usd
 from database import get_db, check_db_connection
@@ -224,6 +224,70 @@ async def get_recent_metrics(minutes: int = 5):
     except Exception as e:
         logger.error(f"Metrics query failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch metrics")
+
+
+@app.get("/alerts")
+async def get_alerts(limit: int = 10, db: AsyncSession = Depends(get_db)):
+    """
+    Get recent alerts from database
+
+    Query Parameters:
+        limit: Number of alerts to return (default: 10)
+
+    Returns list of alerts with LLM explanations
+    """
+    try:
+        query = text("""
+            SELECT
+                alert_id,
+                created_at,
+                severity,
+                title,
+                confidence_score,
+                revenue_at_risk_usd,
+                affected_transactions,
+                sla_breach_countdown_seconds,
+                root_cause,
+                llm_explanation,
+                suggested_action
+            FROM alerts
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """)
+
+        result = await db.execute(query, {"limit": limit})
+        rows = result.fetchall()
+
+        alerts = []
+        for row in rows:
+            # Parse JSONB fields
+            root_cause = row[8]
+            if isinstance(root_cause, str):
+                root_cause = json.loads(root_cause)
+
+            suggested_action = row[10]
+            if isinstance(suggested_action, str):
+                suggested_action = json.loads(suggested_action)
+
+            alerts.append({
+                "alert_id": str(row[0]),
+                "created_at": row[1].isoformat() if row[1] else None,
+                "severity": row[2],
+                "title": row[3],
+                "confidence_score": float(row[4]) if row[4] else 0.0,
+                "revenue_at_risk_usd": float(row[5]) if row[5] else 0.0,
+                "affected_transactions": row[6] if row[6] else 0,
+                "sla_breach_countdown_seconds": row[7],
+                "root_cause": root_cause or {},
+                "llm_explanation": row[9],
+                "suggested_action": suggested_action or {}
+            })
+
+        return {"alerts": alerts, "total": len(alerts)}
+
+    except Exception as e:
+        logger.error(f"Alerts query failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch alerts")
 
 
 @app.get("/")
