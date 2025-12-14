@@ -44,12 +44,13 @@ services:
     container_name: yuno_ingestor
     ports:
       - "8000:8000"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-yuno_admin}:${POSTGRES_PASSWORD:-yuno_secret_2024}@db:5432/${POSTGRES_DB:-yuno_sentinel}
       REDIS_URL: redis://redis:6379
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      ENV: production
+      ENV: development
     depends_on:
       db:
         condition: service_healthy
@@ -125,10 +126,15 @@ services:
   dashboard:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: yuno_dashboard
     ports:
-      - "3000:80"
+      - "3000:5173"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       - ingestor
     networks:
