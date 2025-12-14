@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw } from 'lucide-react';
+import { Shield, DollarSign, AlertTriangle, CheckCircle2, Activity, RefreshCw, Settings } from 'lucide-react';
 import AlertCard from './components/AlertCard';
 import MetricsChart from './components/MetricsChart';
+import RulesConfig from './components/RulesConfig';
 
 function App() {
+  const [currentView, setCurrentView] = useState('alerts'); // 'alerts' or 'rules'
   const [alerts, setAlerts] = useState([]);
   const [totalRevenueAtRisk, setTotalRevenueAtRisk] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -70,25 +72,60 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <div className="text-right">
-                <div className="text-xs text-slate-500">Last updated</div>
-                <div className="text-sm text-slate-700 font-medium tabular-nums flex items-center gap-1.5">
-                  <RefreshCw size={12} className="text-blue-400" />
-                  {lastUpdate.toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                  })}
-                </div>
+              {/* Navigation Tabs */}
+              <div className="flex items-center gap-2 bg-blue-50 p-1 rounded-lg">
+                <button
+                  onClick={() => setCurrentView('alerts')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    currentView === 'alerts'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={16} />
+                    <span>Alerts</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setCurrentView('rules')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    currentView === 'rules'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Settings size={16} />
+                    <span>Configuration</span>
+                  </div>
+                </button>
               </div>
+              {currentView === 'alerts' && (
+                <div className="text-right">
+                  <div className="text-xs text-slate-500">Last updated</div>
+                  <div className="text-sm text-slate-700 font-medium tabular-nums flex items-center gap-1.5">
+                    <RefreshCw size={12} className="text-blue-400" />
+                    {lastUpdate.toLocaleTimeString('en-US', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit'
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* KPI Section */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
+      <main>
+        {currentView === 'rules' ? (
+          <RulesConfig />
+        ) : (
+          <div className="max-w-7xl mx-auto px-6 py-8">
+            {/* KPI Section */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-5 mb-8">
           {/* Revenue at Risk - Prominent */}
           <div className="md:col-span-2 bg-white border border-blue-200 rounded-lg p-6 shadow-sm">
             <div className="flex items-start justify-between">
@@ -207,6 +244,8 @@ function App() {
             </div>
           )}
         </div>
+          </div>
+        )}
       </main>
 
       {/* Footer */}
