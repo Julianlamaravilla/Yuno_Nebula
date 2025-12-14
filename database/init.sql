@@ -5,6 +5,20 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================
+-- TABLE: kams (Key Account Managers)
+-- Stores KAM information for merchant assignment
+-- ============================================
+CREATE TABLE kams (
+    kam_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Index for email lookups
+CREATE INDEX idx_kams_email ON kams(email);
+
+-- ============================================
 -- TABLE: events_log
 -- Stores all payment transaction events
 -- ============================================
@@ -56,14 +70,19 @@ CREATE INDEX idx_alerts_root_cause ON alerts USING GIN(root_cause);
 -- ============================================
 -- TABLE: merchant_rules
 -- Stores merchant-specific SLA and baselines
+-- NOW WITH KAM ASSIGNMENT (1:N relationship)
 -- ============================================
 CREATE TABLE merchant_rules (
     merchant_id VARCHAR(100) PRIMARY KEY,
+    kam_id UUID NOT NULL REFERENCES kams(kam_id) ON DELETE RESTRICT,
     sla_minutes INTEGER NOT NULL DEFAULT 5,
     avg_approval_rate DECIMAL(4,3) NOT NULL DEFAULT 0.70,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Index for KAM lookups
+CREATE INDEX idx_merchant_rules_kam ON merchant_rules(kam_id);
 
 -- ============================================
 -- TABLE: alert_rules
@@ -102,12 +121,32 @@ CREATE INDEX idx_alert_rules_active ON alert_rules(is_active) WHERE is_active = 
 CREATE INDEX idx_alert_rules_lookup ON alert_rules(merchant_id, filter_country, filter_provider) WHERE is_active = TRUE;
 
 -- ============================================
--- SEED DATA: Insert sample merchant rules
+-- SEED DATA: KAMs and Merchants
 -- ============================================
-INSERT INTO merchant_rules (merchant_id, sla_minutes, avg_approval_rate) VALUES
-    ('merchant_shopito', 5, 0.72),
-    ('merchant_techstore', 3, 0.68),
-    ('merchant_fashionhub', 5, 0.75);
+
+-- Insert KAM
+INSERT INTO kams (name, email) VALUES
+    ('Julián Admin', 'julian.admin@yunosentinel.com');
+
+-- Get KAM ID for merchant assignment
+DO $$
+DECLARE
+    julian_kam_id UUID;
+BEGIN
+    SELECT kam_id INTO julian_kam_id FROM kams WHERE email = 'julian.admin@yunosentinel.com';
+
+    -- Insert merchants assigned to Julián
+    INSERT INTO merchant_rules (merchant_id, kam_id, sla_minutes, avg_approval_rate) VALUES
+        ('merchant_shopito', julian_kam_id, 5, 0.72),
+        ('merchant_rappi', julian_kam_id, 3, 0.75),
+        ('merchant_uber', julian_kam_id, 4, 0.78),
+        ('merchant_techstore', julian_kam_id, 3, 0.68),
+        ('merchant_fashionhub', julian_kam_id, 5, 0.75);
+END $$;
+
+-- ============================================
+-- SEED DATA: Alert Rules
+-- ============================================
 
 -- Limpiar reglas viejas
 TRUNCATE alert_rules;
@@ -127,7 +166,7 @@ VALUES ('merchant_shopito', 'Monitoreo Hora Valle', TRUE, 0, 5, 'APPROVAL_RATE',
 INSERT INTO alert_rules (merchant_id, rule_name, filter_country, metric_type, operator, threshold_value, severity)
 VALUES ('merchant_shopito', 'Blackout Colombia', 'CO', 'TOTAL_VOLUME', '<', 1, 'CRITICAL');
 
--- ESCENARIO 5: "Granularidad (Issuer/Cuenta)"
+-- ESCENARIO 4: "Granularidad (Issuer/Cuenta)"
 -- "Si falla BBVA específicamente en Stripe, avisa rápido (5% error)."
 INSERT INTO alert_rules (merchant_id, rule_name, filter_provider, filter_issuer, metric_type, operator, threshold_value, severity)
 VALUES ('merchant_shopito', 'Fallo Específico BBVA', 'STRIPE', 'BBVA', 'ERROR_RATE', '>', 0.05, 'WARNING');
@@ -216,11 +255,30 @@ GROUP BY provider_id, get_issuer_name(raw_payload), get_country(raw_payload)
 HAVING COUNT(*) >= 3
 ORDER BY error_count DESC;
 
+-- View: KAM Dashboard - Merchants and their metrics
+CREATE OR REPLACE VIEW v_kam_merchants AS
+SELECT
+    k.kam_id,
+    k.name as kam_name,
+    k.email as kam_email,
+    mr.merchant_id,
+    mr.sla_minutes,
+    mr.avg_approval_rate,
+    COUNT(DISTINCT e.event_id) as total_transactions_today
+FROM kams k
+INNER JOIN merchant_rules mr ON k.kam_id = mr.kam_id
+LEFT JOIN events_log e ON mr.merchant_id = e.merchant_id
+    AND e.created_at >= CURRENT_DATE
+GROUP BY k.kam_id, k.name, k.email, mr.merchant_id, mr.sla_minutes, mr.avg_approval_rate
+ORDER BY k.name, mr.merchant_id;
+
 -- ============================================
 -- COMMENTS
 -- ============================================
+COMMENT ON TABLE kams IS 'Key Account Managers - manage multiple merchant accounts';
 COMMENT ON TABLE events_log IS 'Stores all payment transaction events with full JSONB payload for granular analysis';
 COMMENT ON TABLE alerts IS 'Stores anomaly detection alerts with LLM-generated explanations';
-COMMENT ON TABLE merchant_rules IS 'Merchant-specific SLA thresholds and approval rate baselines';
+COMMENT ON TABLE merchant_rules IS 'Merchant-specific SLA thresholds and approval rate baselines with KAM assignment';
+COMMENT ON COLUMN merchant_rules.kam_id IS 'Foreign key to kams table - each merchant has one KAM';
 COMMENT ON COLUMN events_log.raw_payload IS 'Full Yuno payment object in JSONB format - enables issuer/BIN level queries';
 COMMENT ON INDEX idx_events_raw_payload IS 'GIN index for fast JSONB queries on payment_method, issuer_name, etc.';

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     openai_api_key: str | None = None
 
+    # Email Configuration (for KAM notifications)
+    email_sender: str | None = None
+    email_password: str | None = None
+
     # Alert Thresholds - Smart Detection
     alert_threshold_error_rate: float = 0.10  # 10% error rate (more sensitive)
     alert_threshold_decline_rate: float = 0.50  # 50% decline rate
