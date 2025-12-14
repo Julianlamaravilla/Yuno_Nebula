@@ -281,15 +281,15 @@ class AnomalyDetector:
         try:
             # Query recent error history
             query = text("""
-                SELECT 
+                SELECT
                     DATE_TRUNC('minute', created_at) as minute,
                     COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
                     COUNT(*) as total
                 FROM events_log
-                WHERE 
+                WHERE
                     provider_id = :provider
                     AND raw_payload->>'country' = :country
-                    AND created_at >= NOW() - INTERVAL ':window minutes'
+                    AND created_at >= NOW() - make_interval(mins => :window)
                 GROUP BY minute
                 ORDER BY minute DESC
                 LIMIT 10
