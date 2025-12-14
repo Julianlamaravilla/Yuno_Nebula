@@ -189,37 +189,66 @@ async def update_redis_metrics(payment: PaymentEvent):
         logger.warning(f"Redis update failed (non-fatal): {e}")
 
 
+# En backend/main.py
+
 @app.get("/metrics/recent")
-async def get_recent_metrics(minutes: int = 5):
+async def get_recent_metrics(minutes: int = 30):
     """
-    Get recent transaction metrics from Redis
-
-    Query Parameters:
-        minutes: Lookback window (default: 5)
-
-    Returns aggregated metrics by provider and status
+    Get time-series metrics from Redis for the chart
+    Returns: List of data points sorted by time
     """
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis unavailable")
 
     try:
-        # Scan for recent keys
+        # Scan stats keys
         pattern = "stats:*"
         keys = []
         async for key in redis_client.scan_iter(match=pattern):
             keys.append(key)
 
-        # Aggregate metrics
-        metrics = {}
+        # Agrupar por minuto (Time Series)
+        # Key format: stats:{country}:{provider}:{status}:{minute_window}
+        # minute_window is YYYYMMDDHHMM
+        time_series = {}
+
         for key in keys:
             count = await redis_client.get(key)
             parts = key.split(":")
             if len(parts) == 5:
-                _, country, provider, status, _ = parts
-                metric_key = f"{country}:{provider}:{status}"
-                metrics[metric_key] = metrics.get(metric_key, 0) + int(count or 0)
+                status = parts[3]       # ERROR, SUCCEEDED, DECLINED
+                minute_str = parts[4]   # 202512140038
 
-        return {"metrics": metrics, "total_keys": len(keys)}
+                if minute_str not in time_series:
+                    time_series[minute_str] = {"total": 0, "errors": 0, "success": 0}
+                
+                val = int(count or 0)
+                time_series[minute_str]["total"] += val
+                
+                if status == "ERROR" or status == "DECLINED":
+                    time_series[minute_str]["errors"] += val
+                elif status == "SUCCEEDED":
+                    time_series[minute_str]["success"] += val
+
+        # Convertir a lista ordenada para el Frontend
+        chart_data = []
+        for minute, data in sorted(time_series.items()):
+            # Parsear fecha "202512140038" a ISO
+            try:
+                dt = datetime.strptime(minute, "%Y%m%d%H%M")
+                approval_rate = (data["success"] / data["total"] * 100) if data["total"] > 0 else 0
+                
+                chart_data.append({
+                    "timestamp": dt.isoformat(),
+                    "approval_rate": round(approval_rate, 2),
+                    "error_rate": round(100 - approval_rate, 2),
+                    "total_count": data["total"]
+                })
+            except ValueError:
+                continue
+
+        # Retornar una LISTA (Array), no un objeto
+        return chart_data[-minutes:] # Retornar los ultimos N minutos
 
     except Exception as e:
         logger.error(f"Metrics query failed: {e}")
