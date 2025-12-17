@@ -219,3 +219,22 @@ sequenceDiagram
 ---
 
 > **Hackathon Note**: This system was built to demonstrate how **granular data** combined with **Generative AI** can transform observability from a passive monitoring task into an active, problem-solving intelligence.
+
+---
+
+## 📸 Screenshots
+
+### KHAM Management
+![KHAM Management](imagines/KHAM-Management.png)
+
+### KHAM One
+![KHAM One](imagines/KHAM-one.png)
+
+### Alert Feed
+![Alert Feed](imagines/alert-feed.png)
+
+### Metrics
+![Metrics](imagines/metrics.png)
+
+### Rules Settings
+![Rules Settings](imagines/rules-settings.png)
